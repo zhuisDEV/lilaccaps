@@ -1,6 +1,6 @@
 [package]
 name = "lilaccaps"
-version = "0.1.1"
+version = "0.1.2"
 description = "Rust CLI for transcribing media and burning subtitles into video"
 edition = "2024"
 license = "MIT"

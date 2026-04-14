@@ -7,7 +7,16 @@ use crate::media::{ensure_ffmpeg_available, ffmpeg_supports_filter, subtitles_fi
 use crate::runtime::{MAGICK_DEPENDENCY, ensure_dependency, ensure_dir, tmp_dir};
 use crate::subtitles::{SubtitleCue, parse_srt_file};
 
-const DEFAULT_FONT_PATH: &str = "/System/Library/Fonts/Helvetica.ttc";
+const CJK_FONT_CANDIDATES: [&str; 3] = [
+    "/System/Library/Fonts/Hiragino Sans GB.ttc",
+    "/System/Library/Fonts/STHeiti Medium.ttc",
+    "/System/Library/Fonts/STHeiti Light.ttc",
+];
+
+const LATIN_FONT_CANDIDATES: [&str; 2] = [
+    "/System/Library/Fonts/Helvetica.ttc",
+    "/System/Library/Fonts/HelveticaNeue.ttc",
+];
 
 pub fn burn_in_subtitles(
     runtime_home: &Path,
@@ -86,18 +95,15 @@ fn render_overlay_images(
     let mut overlays = Vec::with_capacity(cues.len());
 
     for cue in cues {
+        let font_path = select_overlay_font(&cue.text);
         let image_path = work_dir.join(format!("cue-{:04}.png", cue.index));
         let image_target = format!("PNG32:{}", image_path.display());
+        let label = format!("label:{}", cue.text);
         let status = Command::new("magick")
-            .arg("-size")
-            .arg(format!("{width}x{height}"))
-            .arg("xc:none")
             .arg("-background")
             .arg("none")
-            .arg("-alpha")
-            .arg("set")
             .arg("-font")
-            .arg(DEFAULT_FONT_PATH)
+            .arg(font_path)
             .arg("-fill")
             .arg("white")
             .arg("-stroke")
@@ -106,11 +112,17 @@ fn render_overlay_images(
             .arg("2")
             .arg("-pointsize")
             .arg(point_size_for_height(height).to_string())
+            .arg(&label)
             .arg("-gravity")
             .arg("south")
-            .arg("-annotate")
-            .arg("+0+40")
-            .arg(&cue.text)
+            .arg("-background")
+            .arg("none")
+            .arg("-extent")
+            .arg(format!("{width}x{height}"))
+            .arg("-gravity")
+            .arg("south")
+            .arg("-splice")
+            .arg("0x40")
             .arg(&image_target)
             .status()
             .with_context(|| format!("failed to start ImageMagick for cue {}", cue.index))?;
@@ -193,4 +205,51 @@ fn burn_in_with_overlay_images(
 fn point_size_for_height(height: u32) -> u32 {
     let candidate = height / 17;
     candidate.max(28)
+}
+
+fn select_overlay_font(text: &str) -> &'static str {
+    let candidates = if text.chars().any(is_cjk_or_korean_or_japanese) {
+        &CJK_FONT_CANDIDATES[..]
+    } else {
+        &LATIN_FONT_CANDIDATES[..]
+    };
+
+    candidates
+        .iter()
+        .copied()
+        .find(|path| Path::new(path).exists())
+        .unwrap_or(LATIN_FONT_CANDIDATES[0])
+}
+
+fn is_cjk_or_korean_or_japanese(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0x3040..=0x309F
+            | 0x30A0..=0x30FF
+            | 0x31F0..=0x31FF
+            | 0xAC00..=0xD7AF
+            | 0xF900..=0xFAFF
+            | 0xFF66..=0xFF9D
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_cjk_or_korean_or_japanese, select_overlay_font};
+
+    #[test]
+    fn detects_cjk_script() {
+        assert!(is_cjk_or_korean_or_japanese('不'));
+        assert!(is_cjk_or_korean_or_japanese('あ'));
+        assert!(is_cjk_or_korean_or_japanese('한'));
+        assert!(!is_cjk_or_korean_or_japanese('A'));
+    }
+
+    #[test]
+    fn prefers_cjk_font_for_cjk_text() {
+        let font = select_overlay_font("不好了麻醉剂用完了");
+        assert!(!font.contains("Helvetica"));
+    }
 }

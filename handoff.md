@@ -89,3 +89,5 @@ The next implementation should leave the repo with:
 - Config schema changes must stay backward-compatible on read; older configs missing `transcribe.language` should default to `"auto"` instead of breaking `update`.
 - Forced transcription language should fall back to automatic language detection when Whisper returns no usable segments.
 - The ImageMagick burn-in fallback must emit `PNG32:` overlays and normalize overlay inputs to `rgba`; otherwise ffmpeg can compose monochrome/transparent inputs into a black video stream.
+- For CJK subtitles in the ImageMagick fallback, prefer a CJK-capable macOS system font and render text via a `label:` image before expanding to the video canvas; the older full-canvas annotate path could silently produce transparent overlays.
+- Burn-in font choice should key off the subtitle text itself: CJK-heavy cues should prefer CJK-capable fonts, while Latin text can stay on the lighter Latin fallback.
