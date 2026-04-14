@@ -87,10 +87,15 @@ fn render_overlay_images(
 
     for cue in cues {
         let image_path = work_dir.join(format!("cue-{:04}.png", cue.index));
+        let image_target = format!("PNG32:{}", image_path.display());
         let status = Command::new("magick")
             .arg("-size")
             .arg(format!("{width}x{height}"))
             .arg("xc:none")
+            .arg("-background")
+            .arg("none")
+            .arg("-alpha")
+            .arg("set")
             .arg("-font")
             .arg(DEFAULT_FONT_PATH)
             .arg("-fill")
@@ -106,7 +111,7 @@ fn render_overlay_images(
             .arg("-annotate")
             .arg("+0+40")
             .arg(&cue.text)
-            .arg(&image_path)
+            .arg(&image_target)
             .status()
             .with_context(|| format!("failed to start ImageMagick for cue {}", cue.index))?;
 
@@ -153,7 +158,7 @@ fn burn_in_with_overlay_images(
         }
 
         filter_graph.push_str(&format!(
-            "[{previous}][{input}]overlay=0:0:enable='between(t,{start:.2},{end:.2})'[{next}]"
+            "[{input}]format=rgba[ov{index}];[{previous}][ov{index}]overlay=0:0:enable='between(t,{start:.2},{end:.2})'[{next}]"
         ));
 
         previous = next;

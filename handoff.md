@@ -88,3 +88,4 @@ The next implementation should leave the repo with:
 - Transcription language now supports config default plus per-run CLI override via `--lang`; `"auto"` preserves Whisper auto-detection.
 - Config schema changes must stay backward-compatible on read; older configs missing `transcribe.language` should default to `"auto"` instead of breaking `update`.
 - Forced transcription language should fall back to automatic language detection when Whisper returns no usable segments.
+- The ImageMagick burn-in fallback must emit `PNG32:` overlays and normalize overlay inputs to `rgba`; otherwise ffmpeg can compose monochrome/transparent inputs into a black video stream.
