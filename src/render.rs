@@ -32,6 +32,10 @@ fn burn_in_with_subtitles_filter(video: &Path, subs: &Path, output: &Path) -> Re
         .arg(video)
         .arg("-vf")
         .arg(filter)
+        .arg("-map")
+        .arg("0:v:0")
+        .arg("-map")
+        .arg("0:a?")
         .arg("-c:v")
         .arg("libx264")
         .arg("-pix_fmt")
@@ -124,6 +128,10 @@ fn burn_in_with_overlay_images(
     overlays: &[(SubtitleCue, PathBuf)],
     output: &Path,
 ) -> Result<()> {
+    if overlays.is_empty() {
+        bail!("no subtitle overlays were generated");
+    }
+
     let mut command = Command::new("ffmpeg");
     command.arg("-y").arg("-i").arg(video);
 

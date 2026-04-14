@@ -10,6 +10,7 @@ pub fn run(args: TranscribeArgs) -> Result<()> {
     println!("output = {}", output.output.display());
     println!("model_path = {}", output.model_path.display());
     println!("language = {}", output.language);
+    println!("fallback_language_used = {}", output.fallback_language_used);
     println!("status = {}", output.status);
     Ok(())
 }

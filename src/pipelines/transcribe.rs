@@ -18,6 +18,7 @@ pub struct TranscribeOutput {
     pub output: PathBuf,
     pub model_path: PathBuf,
     pub language: String,
+    pub fallback_language_used: bool,
     pub status: &'static str,
 }
 
@@ -50,7 +51,8 @@ pub fn run(
     let audio_path = temp_audio_path(&loaded.paths.runtime_home, &input);
     let language = resolve_language(lang.as_deref(), Some(&loaded.config.transcribe.language))?;
     extract_audio_to_wav(&input, &audio_path)?;
-    let cues = transcribe_to_cues(&model_path, &audio_path, language.as_deref())?;
+    let (cues, fallback_language_used) =
+        transcribe_to_cues(&model_path, &audio_path, language.as_deref())?;
     write_srt_file(&output, &cues)?;
 
     Ok(TranscribeOutput {
@@ -58,6 +60,7 @@ pub fn run(
         output,
         model_path,
         language: language.unwrap_or_else(|| "auto".to_string()),
+        fallback_language_used,
         status: "generated",
     })
 }
@@ -79,6 +82,26 @@ fn temp_audio_path(runtime_home: &Path, input: &Path) -> PathBuf {
 }
 
 fn transcribe_to_cues(
+    model_path: &Path,
+    audio_path: &Path,
+    language: Option<&str>,
+) -> Result<(Vec<SubtitleCue>, bool)> {
+    let cues = transcribe_once(model_path, audio_path, language)?;
+    if !cues.is_empty() {
+        return Ok((cues, false));
+    }
+
+    if language.is_some() {
+        let fallback_cues = transcribe_once(model_path, audio_path, None)?;
+        if !fallback_cues.is_empty() {
+            return Ok((fallback_cues, true));
+        }
+    }
+
+    bail!("whisper returned no subtitle segments");
+}
+
+fn transcribe_once(
     model_path: &Path,
     audio_path: &Path,
     language: Option<&str>,
@@ -138,10 +161,6 @@ fn transcribe_to_cues(
             end_cs: segment.end_timestamp(),
             text,
         });
-    }
-
-    if cues.is_empty() {
-        bail!("whisper returned no subtitle segments");
     }
 
     Ok(cues)

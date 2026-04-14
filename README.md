@@ -124,7 +124,8 @@ Important values:
 
 `transcribe.language` defaults to `"auto"`. Set it to a Whisper language code such as
 `"en"`, `"zh"`, or `"ja"` to force transcription in a specific language. `--lang` on
-`lilaccaps transcribe` overrides the config value for a single run.
+`lilaccaps transcribe` overrides the config value for a single run. If a forced language
+produces no subtitle segments, `lilaccaps` retries once with automatic language detection.
 
 ## Repository Layout
 
