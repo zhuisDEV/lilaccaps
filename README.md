@@ -80,7 +80,7 @@ After installation, `lilaccaps status` reports:
 
 This initializes:
 
-- `lilaccaps.toml`
+- `~/.lilac/lilaccaps/lilaccaps.toml`
 - runtime home, defaulting to `~/.lilac/lilaccaps`
 - Whisper model assets under the runtime home
 - OpenClaw skill bootstrap files
@@ -108,7 +108,7 @@ lilaccaps doctor
 
 ## Configuration
 
-The config file is `lilaccaps.toml`.
+The default config file is `~/.lilac/lilaccaps/lilaccaps.toml`.
 
 Important values:
 

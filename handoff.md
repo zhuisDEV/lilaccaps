@@ -84,3 +84,4 @@ The next implementation should leave the repo with:
 - Runtime dependency tests should use synthetic missing commands so they remain stable across developer machines.
 - `doctor` is the shared prerequisite inspection entrypoint; `install` should reuse it instead of reintroducing bespoke dependency checks.
 - Automatic prerequisite repair is intentionally limited to macOS plus Homebrew and only for explicitly mapped packages.
+- The default config path now lives under the runtime home at `~/.lilac/lilaccaps/lilaccaps.toml`.

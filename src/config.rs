@@ -10,7 +10,6 @@ use crate::release::infer_github_repo;
 use crate::runtime::ensure_dir;
 
 const DEFAULT_RUNTIME_HOME: &str = "~/.lilac/lilaccaps";
-const DEFAULT_CONFIG_DIR: &str = "~/.config/lilaccaps";
 const CONFIG_FILE_NAME: &str = "lilaccaps.toml";
 
 #[derive(Debug, Clone)]
@@ -120,7 +119,7 @@ pub fn load_config(override_path: Option<PathBuf>) -> Result<LoadedConfig> {
 }
 
 pub fn default_config() -> Result<Config> {
-    let runtime_home = expand_home(Path::new(DEFAULT_RUNTIME_HOME))?;
+    let runtime_home = default_runtime_home()?;
     let skill_path = default_skill_path()?;
     let github_repo = infer_github_repo();
 
@@ -137,9 +136,12 @@ pub fn default_config() -> Result<Config> {
     })
 }
 
+pub fn default_runtime_home() -> Result<PathBuf> {
+    expand_home(Path::new(DEFAULT_RUNTIME_HOME))
+}
+
 pub fn default_config_path() -> Result<PathBuf> {
-    let config_dir = expand_home(Path::new(DEFAULT_CONFIG_DIR))?;
-    Ok(config_dir.join(CONFIG_FILE_NAME))
+    Ok(default_runtime_home()?.join(CONFIG_FILE_NAME))
 }
 
 pub fn write_config_file(config_path: &Path, config: &Config) -> Result<()> {
@@ -170,12 +172,19 @@ pub fn expand_home(path: &Path) -> Result<PathBuf> {
 mod tests {
     use std::path::Path;
 
-    use super::expand_home;
+    use super::{default_config_path, default_runtime_home, expand_home};
 
     #[test]
     fn expands_tilde_paths() {
         let expanded = expand_home(Path::new("~/demo")).expect("tilde path should expand");
         assert!(expanded.ends_with("demo"));
         assert!(expanded.is_absolute());
+    }
+
+    #[test]
+    fn default_config_lives_under_runtime_home() {
+        let runtime_home = default_runtime_home().expect("runtime home should resolve");
+        let config_path = default_config_path().expect("config path should resolve");
+        assert_eq!(config_path, runtime_home.join("lilaccaps.toml"));
     }
 }
