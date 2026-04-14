@@ -107,7 +107,7 @@ pub fn ensure_skill_file(config: &Config) -> Result<PathBuf> {
     }
 
     let content = format!(
-        "{GENERATED_SKILL_MARKER}\n# lilaccaps\n\nUse the `lilaccaps` CLI for subtitle generation and burn-in.\n\n## Commands\n- `lilaccaps status`\n- `lilaccaps captions <input>`\n- `lilaccaps burnin <video> --subs <subtitle-file>`\n\n## Notes\n- `burnin` is render-only.\n- caption generation is a separate workflow.\n- runtime home is configured via `lilaccaps.toml` and `LILACCAPS_HOME`.\n"
+        "{GENERATED_SKILL_MARKER}\n# lilaccaps\n\nUse the `lilaccaps` CLI for transcription and subtitle rendering.\n\n## Commands\n- `lilaccaps status`\n- `lilaccaps transcribe <input>`\n- `lilaccaps burnin <video> --subs <subtitle-file>`\n\n## Notes\n- `burnin` is render-only.\n- transcription is a separate workflow.\n- runtime home is configured via `lilaccaps.toml` and `LILACCAPS_HOME`.\n"
     );
 
     fs::write(skill_path, content)

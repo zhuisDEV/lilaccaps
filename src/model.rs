@@ -10,11 +10,11 @@ use crate::runtime::{ensure_dir, models_dir};
 const MODEL_BASE_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
 
 pub fn resolved_model_path(paths: &ConfigPaths, config: &Config) -> Result<PathBuf> {
-    if let Some(path) = &config.captions.model.path {
+    if let Some(path) = &config.transcribe.model.path {
         return Ok(path.clone());
     }
 
-    let file_name = model_file_name(&config.captions.model.id)?;
+    let file_name = model_file_name(&config.transcribe.model.id)?;
     Ok(models_dir(&paths.runtime_home).join(file_name))
 }
 
@@ -28,7 +28,7 @@ pub fn ensure_model_downloaded(paths: &ConfigPaths, config: &Config) -> Result<P
         ensure_dir(parent)?;
     }
 
-    let url = model_url(&config.captions.model.id)?;
+    let url = model_url(&config.transcribe.model.id)?;
     download_to_path(&url, &destination)?;
 
     Ok(destination)

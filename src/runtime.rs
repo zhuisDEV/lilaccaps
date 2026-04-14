@@ -62,7 +62,7 @@ pub fn detect_runtime_health(paths: &ConfigPaths, config: &Config) -> RuntimeHea
     let ffmpeg_available = command_exists("ffmpeg");
     let ffprobe_available = command_exists("ffprobe");
     let model_path = config
-        .captions
+        .transcribe
         .model
         .path
         .clone()

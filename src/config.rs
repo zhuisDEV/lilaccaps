@@ -31,7 +31,7 @@ pub struct Config {
     pub runtime: RuntimeConfig,
     pub agent: AgentConfig,
     pub release: ReleaseConfig,
-    pub captions: CaptionsConfig,
+    pub transcribe: TranscribeConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,7 +50,7 @@ pub struct ReleaseConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CaptionsConfig {
+pub struct TranscribeConfig {
     pub model: ModelConfig,
 }
 
@@ -128,7 +128,7 @@ pub fn default_config() -> Result<Config> {
         runtime: RuntimeConfig { home: runtime_home },
         agent: AgentConfig { skill_path },
         release: ReleaseConfig { github_repo },
-        captions: CaptionsConfig {
+        transcribe: TranscribeConfig {
             model: ModelConfig {
                 id: "base".to_string(),
                 path: None,

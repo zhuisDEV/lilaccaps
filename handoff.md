@@ -3,7 +3,7 @@
 ## Goal
 Implement a clean `lilaccaps` CLI with two separate primary workflows:
 
-1. generate captions from video/audio
+1. transcribe video/audio into subtitle output
 2. burn an existing subtitle file into a video
 
 Do not collapse these into one command.
@@ -13,7 +13,7 @@ Do not collapse these into one command.
 - CLI is unified under `lilaccaps`
 - `lilaccaps burnin` is render-only
 - Caption generation is a separate command/workflow
-- Video/audio to captions may be delegated by the main OpenClaw agent to a subagent
+- Video/audio to transcription may be delegated by the main OpenClaw agent to a subagent
 - Use Rust/TS/Deno
 - Keep the primary flow clean
 - Add fallback only after the main path is solid
@@ -22,15 +22,13 @@ Do not collapse these into one command.
 Define two commands only:
 
 ```text
-lilaccaps captions <input>
+lilaccaps transcribe <input>
 lilaccaps burnin <video> --subs <subtitle-file>
 ```
 
-Use `captions` as the subtitle-generation command unless there is a strong repo-level reason to prefer `transcribe`.
-
 ## Implementation Boundary
 
-### `captions`
+### `transcribe`
 Owns:
 - media probing
 - audio extraction or normalization if needed
@@ -61,10 +59,10 @@ Does not own:
 
 ## Suggested Build Order
 1. Scaffold Rust CLI entrypoint `lilaccaps`
-2. Add `captions` and `burnin` subcommands
+2. Add `transcribe` and `burnin` subcommands
 3. Implement `.srt` generation pipeline
 4. Implement burn-in rendering pipeline
-5. Add subagent delegation path for caption generation if the surrounding OpenClaw integration needs it
+5. Add subagent delegation path for transcription if the surrounding OpenClaw integration needs it
 
 ## What To Avoid
 - making `burnin` auto-generate subtitles

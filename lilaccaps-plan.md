@@ -1,10 +1,11 @@
 # lilaccaps Control Plan
 
 ## Purpose
-`lilaccaps` is the canonical CLI and project name for a clean subtitle pipeline focused on two distinct responsibilities:
+`lilaccaps` is the canonical CLI and project name for a clean subtitle pipeline focused on three distinct responsibilities:
 
 1. subtitle generation
-2. subtitle rendering
+2. subtitle embedding
+3. subtitle rendering
 
 The primary flow must keep these responsibilities separate. Fallback behavior must not be mixed into the primary path.
 
@@ -12,9 +13,10 @@ The primary flow must keep these responsibilities separate. Fallback behavior mu
 - Canonical name: `lilaccaps`
 - Unified CLI entrypoint: `lilaccaps`
 - CLI lifecycle commands include `install`, `update`, `status`, and `uninstall`
+- `lilaccaps embed` is embed-only
 - `lilaccaps burnin` is render-only
 - Subtitle generation is a separate command/workflow
-- Video/audio to captions may be delegated by the main OpenClaw agent to a subagent
+- Video/audio to transcription may be delegated by the main OpenClaw agent to a subagent
 - Use Rust/TS/Deno
 - Keep code and design clean and tidy
 
@@ -59,7 +61,7 @@ If autodetection is not reliable enough in the first implementation, ship a simp
 
 ## Primary Flow
 
-### Flow A: Generate Captions
+### Flow A: Transcribe To Subtitles
 Input:
 - local video file
 - local audio file
@@ -76,15 +78,10 @@ Responsibility:
 - validate subtitle format
 - write exact output paths
 
-This flow should be exposed as a dedicated command, for example:
-- `lilaccaps captions <input>`
-- or `lilaccaps transcribe <input>`
+This flow should be exposed as a dedicated command:
+- `lilaccaps transcribe <input>`
 
-Recommendation:
-- use one command name consistently across the project, docs, and internal modules
-- prefer `captions` if the output contract is subtitle-first rather than raw transcript-first
-
-### Flow B: Burn In Existing Captions
+### Flow B: Burn In Existing Subtitles
 Input:
 - local video file
 - existing subtitle or caption file
@@ -103,6 +100,25 @@ Command:
 
 This command must not trigger subtitle generation internally.
 
+### Flow C: Embed Existing Subtitles
+Input:
+- local video file
+- existing subtitle or caption file
+
+Output:
+- video container with an embedded subtitle track
+
+Responsibility:
+- validate video input
+- validate subtitle input
+- mux subtitle data into the output container
+- write exact output path
+
+Command:
+- `lilaccaps embed <video> --subs <subtitle-file>`
+
+This command must not trigger subtitle generation internally.
+
 ## Command Model
 Proposed top-level shape:
 
@@ -111,22 +127,23 @@ lilaccaps install [options]
 lilaccaps update [options]
 lilaccaps status [options]
 lilaccaps uninstall [options]
-lilaccaps captions <input> [options]
+lilaccaps transcribe <input> [options]
+lilaccaps embed <video> --subs <subtitle-file> [options]
 lilaccaps burnin <video> --subs <subtitle-file> [options]
 ```
 
 Optional later expansion:
 
 ```text
-lilaccaps softsub <video> --subs <subtitle-file> [options]
 lilaccaps translate <subtitle-file> [options]
 ```
 
 The initial implementation should focus on:
 1. `install`
 2. `status`
-3. `captions`
-4. `burnin`
+3. `transcribe`
+4. `embed`
+5. `burnin`
 
 ## Architecture
 
@@ -147,7 +164,7 @@ Suggested implementation:
 - Rust CLI as the primary executable
 - TS/Deno allowed for helper tooling or agent-facing orchestration where it is a better fit
 
-### 2. Caption Generation Pipeline
+### 2. Transcription Pipeline
 Responsibility:
 - media probe
 - optional audio extraction
@@ -161,18 +178,26 @@ This pipeline should be isolated from rendering concerns.
 Responsibility:
 - subtitle file validation
 - render configuration
-- video re-encode with burned-in captions
+- video re-encode with burned-in subtitles
 
-This pipeline should assume captions already exist.
+This pipeline should assume subtitle files already exist.
 
-### 4. Agent Orchestration Boundary
+### 4. Subtitle Embedding Pipeline
 Responsibility:
-- allow the main OpenClaw agent to delegate video/audio to captions work to a subagent when appropriate
+- subtitle file validation
+- container and codec compatibility checks
+- subtitle track muxing without burning subtitles into frames
+
+This pipeline should assume subtitle files already exist.
+
+### 5. Agent Orchestration Boundary
+Responsibility:
+- allow the main OpenClaw agent to delegate video/audio transcription work to a subagent when appropriate
 - keep the main agent focused on intent gathering and result reporting
 
-Delegation applies to caption generation, not to redefining the `burnin` command.
+Delegation applies to transcription, not to redefining the `burnin` command.
 
-### 5. Install And Lifecycle Management
+### 6. Install And Lifecycle Management
 Responsibility:
 - install the CLI globally
 - check for newer stable releases from GitHub
@@ -251,7 +276,8 @@ Deliver:
 - runtime home resolution
 - `install` command contract
 - `status` command contract
-- `captions` command contract
+- `transcribe` command contract
+- `embed` command contract
 - `burnin` command contract
 - shared input/output path handling
 
@@ -260,7 +286,7 @@ Deliver:
 - install bootstrap path
 - version inspection and release-check plumbing
 - environment validation in `status`
-- caption generation pipeline to `.srt`
+- transcription pipeline to `.srt`
 - exact output path reporting
 - deterministic error handling
 
@@ -268,13 +294,14 @@ Deliver:
 Deliver:
 - `update` workflow
 - `uninstall` workflow
+- `embed` workflow
 - `burnin` rendering pipeline
 - render options that remain narrow and explicit
 
 ### Phase 4
 Deliver:
-- agent delegation support for caption generation
-- optional translation or softsub as separate workflows
+- agent delegation support for transcription
+- optional translation as a separate workflow
 
 ## Fallback Strategy
 Fallback is a separate concern and should be implemented after the primary flow is stable.
@@ -291,7 +318,8 @@ Rules:
 
 ## Clean Design Rules
 - Keep lifecycle commands separate from subtitle-processing commands
-- Keep `captions` and `burnin` as separate workflows with separate modules
+- Keep `transcribe`, `embed`, and `burnin` as separate workflows with separate modules
+- Do not let `embed` call transcription internally
 - Do not let `burnin` call transcription internally
 - Prefer explicit artifacts over implicit side effects
 - Keep command semantics narrow
@@ -310,14 +338,16 @@ src/
     update.rs
     status.rs
     uninstall.rs
-    captions.rs
+    transcribe.rs
+    embed.rs
     burnin.rs
   config/
   runtime/
   integration/
   release/
   pipelines/
-    captions/
+    transcribe/
+    embed/
     burnin/
   media/
   subtitles/
@@ -343,6 +373,7 @@ Examples:
 - initialized `lilaccaps.toml`
 - installed binary in `~/.cargo/bin`
 - generated `.srt`
+- embedded subtitle video
 - burned-in `.mp4`
 
 ## Non-Goals For Initial Delivery
@@ -355,7 +386,8 @@ Examples:
 Build the `lilaccaps` CLI skeleton around first-class commands:
 - `install`
 - `status`
-- `captions`
+- `transcribe`
+- `embed`
 - `burnin`
 
-Then implement `.srt` generation first, followed by render-only burn-in, with `update` and `uninstall` added as separate lifecycle workflows.
+Then implement `.srt` generation first, followed by embed-only output and render-only burn-in, with `update` and `uninstall` added as separate lifecycle workflows.

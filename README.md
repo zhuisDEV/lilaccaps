@@ -6,17 +6,17 @@
 
 `lilaccaps` is a clean Rust CLI for two separate workflows:
 
-1. generate captions from local video or audio
+1. transcribe local video or audio into subtitle files
 2. burn an existing subtitle file into a video
 
 The command model stays explicit:
 
-- `lilaccaps captions` generates subtitle artifacts such as `.srt`
-- `lilaccaps burnin` is render-only and never hides caption generation inside the command
+- `lilaccaps transcribe` generates subtitle artifacts such as `.srt`
+- `lilaccaps burnin` is render-only and never hides transcription inside the command
 
 ## Project Cards
 
-| Captions | Burn-in | Lifecycle |
+| Transcribe | Burn-in | Lifecycle |
 | --- | --- | --- |
 | Extract audio with `ffmpeg`, transcribe with Whisper, write `.srt` | Render an existing subtitle file into video | Install, status, update, and uninstall support |
 | Primary flow stays subtitle-first | Primary renderer uses `ffmpeg` subtitle filters when available | Configured with `lilaccaps.toml` and `LILACCAPS_HOME` |
@@ -25,7 +25,7 @@ The command model stays explicit:
 ## Features
 
 - Unified CLI under `lilaccaps`
-- `captions` and `burnin` kept as separate first-class workflows
+- `transcribe` and `burnin` kept as separate first-class workflows
 - Managed Whisper model download under the runtime home
 - Runtime health checks through `lilaccaps status`
 - Generated OpenClaw skill bootstrap
@@ -63,10 +63,10 @@ This initializes:
 
 ## Usage
 
-Generate captions:
+Transcribe into subtitles:
 
 ```bash
-lilaccaps captions ./input.mp4
+lilaccaps transcribe ./input.mp4
 ```
 
 Burn in an existing subtitle file:
@@ -90,8 +90,8 @@ Important values:
 - `runtime.home`
 - `agent.skill_path`
 - `release.github_repo`
-- `captions.model.id`
-- `captions.model.path`
+- `transcribe.model.id`
+- `transcribe.model.path`
 
 `LILACCAPS_HOME` overrides the runtime home at runtime.
 
@@ -117,7 +117,7 @@ Supporting planning docs:
 
 This project is usable now for:
 
-- local caption generation to `.srt`
+- local transcription to `.srt`
 - burn-in rendering from existing `.srt`
 - installation and environment health reporting
 

@@ -37,4 +37,4 @@ cargo test
 
 - keep modules small and explicit
 - prefer direct command semantics over hidden behavior
-- preserve the separation between caption generation and rendering
+- preserve the separation between transcription and rendering

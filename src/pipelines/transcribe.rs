@@ -11,7 +11,7 @@ use crate::runtime::{ensure_dir, tmp_dir};
 use crate::subtitles::{SubtitleCue, write_srt_file};
 
 #[derive(Debug, Clone)]
-pub struct CaptionsOutput {
+pub struct TranscribeOutput {
     pub input: PathBuf,
     pub output: PathBuf,
     pub model_path: PathBuf,
@@ -22,7 +22,7 @@ pub fn run(
     input: PathBuf,
     config_path: Option<PathBuf>,
     output: Option<PathBuf>,
-) -> Result<CaptionsOutput> {
+) -> Result<TranscribeOutput> {
     if !input.exists() {
         bail!("input media does not exist: {}", input.display());
     }
@@ -36,7 +36,7 @@ pub fn run(
     if let Some(parent) = output.parent() {
         fs::create_dir_all(parent).with_context(|| {
             format!(
-                "failed to create output directory for captions {}",
+                "failed to create output directory for transcription {}",
                 output.display()
             )
         })?;
@@ -48,7 +48,7 @@ pub fn run(
     let cues = transcribe_to_cues(&model_path, &audio_path)?;
     write_srt_file(&output, &cues)?;
 
-    Ok(CaptionsOutput {
+    Ok(TranscribeOutput {
         input,
         output,
         model_path,
@@ -60,7 +60,7 @@ fn default_output_path(input: &Path) -> PathBuf {
     let stem = input
         .file_stem()
         .and_then(|item| item.to_str())
-        .unwrap_or("captions");
+        .unwrap_or("transcript");
     input.with_file_name(format!("{stem}.srt"))
 }
 

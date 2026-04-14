@@ -22,7 +22,7 @@ enum Command {
     Update(UpdateArgs),
     Status(StatusArgs),
     Uninstall(UninstallArgs),
-    Captions(CaptionsArgs),
+    Transcribe(TranscribeArgs),
     Burnin(BurninArgs),
 }
 
@@ -55,7 +55,7 @@ pub struct UninstallArgs {
 }
 
 #[derive(Debug, Clone, Args)]
-pub struct CaptionsArgs {
+pub struct TranscribeArgs {
     pub input: PathBuf,
     #[arg(long)]
     pub config_path: Option<PathBuf>,
@@ -82,7 +82,7 @@ pub fn run() -> Result<()> {
         Command::Update(args) => commands::update::run(args),
         Command::Status(args) => commands::status::run(args),
         Command::Uninstall(args) => commands::uninstall::run(args),
-        Command::Captions(args) => commands::captions::run(args),
+        Command::Transcribe(args) => commands::transcribe::run(args),
         Command::Burnin(args) => commands::burnin::run(args),
     }
 }
