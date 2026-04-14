@@ -5,7 +5,9 @@ use crate::config::load_config;
 use crate::integration::detect_skill_path;
 use crate::model::resolved_model_path;
 use crate::release::latest_release;
-use crate::runtime::{current_executable, detect_runtime_health, install_binary_path};
+use crate::runtime::{
+    collect_doctor_report, current_executable, detect_runtime_health, install_binary_path,
+};
 
 pub fn run(args: StatusArgs) -> Result<()> {
     let loaded = load_config(args.config_path)?;
@@ -15,6 +17,7 @@ pub fn run(args: StatusArgs) -> Result<()> {
     let install_path = install_binary_path()?;
     let current_exe = current_executable()?;
     let runtime_health = detect_runtime_health(&loaded.paths, &loaded.config);
+    let doctor_report = collect_doctor_report();
     let detected_skill = detect_skill_path(&loaded.config.agent);
     let model_path = resolved_model_path(&loaded.paths, &loaded.config)?;
     let detected_skill_string = detected_skill
@@ -61,6 +64,7 @@ pub fn run(args: StatusArgs) -> Result<()> {
         println!("  \"config_valid\": {},", runtime_health.config_valid);
         println!("  \"installed\": {},", runtime_health.installed);
         println!("  \"healthy\": {},", runtime_health.healthy);
+        println!("  \"cargo_available\": {},", runtime_health.cargo_available);
         println!(
             "  \"ffmpeg_available\": {},",
             runtime_health.ffmpeg_available
@@ -69,10 +73,44 @@ pub fn run(args: StatusArgs) -> Result<()> {
             "  \"ffprobe_available\": {},",
             runtime_health.ffprobe_available
         );
+        println!("  \"cmake_available\": {},", runtime_health.cmake_available);
+        println!(
+            "  \"magick_available\": {},",
+            runtime_health.magick_available
+        );
+        println!("  \"build_ready\": {},", runtime_health.build_ready);
+        println!(
+            "  \"fallback_renderer_ready\": {},",
+            runtime_health.fallback_renderer_ready
+        );
+        println!(
+            "  \"can_fix_with_brew\": {},",
+            doctor_report.can_fix_with_brew
+        );
         println!("  \"model_ready\": {},", runtime_health.model_ready);
         println!("  \"missing\": [");
         for (index, item) in runtime_health.missing.iter().enumerate() {
             let suffix = if index + 1 == runtime_health.missing.len() {
+                ""
+            } else {
+                ","
+            };
+            println!("    \"{}\"{}", item, suffix);
+        }
+        println!("  ],");
+        println!("  \"brew_packages\": [");
+        for (index, item) in doctor_report.brew_packages.iter().enumerate() {
+            let suffix = if index + 1 == doctor_report.brew_packages.len() {
+                ""
+            } else {
+                ","
+            };
+            println!("    \"{}\"{}", item, suffix);
+        }
+        println!("  ],");
+        println!("  \"advisories\": [");
+        for (index, item) in doctor_report.advisories.iter().enumerate() {
+            let suffix = if index + 1 == doctor_report.advisories.len() {
                 ""
             } else {
                 ","
@@ -105,8 +143,17 @@ pub fn run(args: StatusArgs) -> Result<()> {
     println!("config_valid = {}", runtime_health.config_valid);
     println!("installed = {}", runtime_health.installed);
     println!("healthy = {}", runtime_health.healthy);
+    println!("cargo_available = {}", runtime_health.cargo_available);
     println!("ffmpeg_available = {}", runtime_health.ffmpeg_available);
     println!("ffprobe_available = {}", runtime_health.ffprobe_available);
+    println!("cmake_available = {}", runtime_health.cmake_available);
+    println!("magick_available = {}", runtime_health.magick_available);
+    println!("build_ready = {}", runtime_health.build_ready);
+    println!(
+        "fallback_renderer_ready = {}",
+        runtime_health.fallback_renderer_ready
+    );
+    println!("can_fix_with_brew = {}", doctor_report.can_fix_with_brew);
     println!("model_ready = {}", runtime_health.model_ready);
     println!(
         "missing = {}",
@@ -114,6 +161,22 @@ pub fn run(args: StatusArgs) -> Result<()> {
             "none".to_string()
         } else {
             runtime_health.missing.join(", ")
+        }
+    );
+    println!(
+        "brew_packages = {}",
+        if doctor_report.brew_packages.is_empty() {
+            "none".to_string()
+        } else {
+            doctor_report.brew_packages.join(", ")
+        }
+    );
+    println!(
+        "advisories = {}",
+        if doctor_report.advisories.is_empty() {
+            "none".to_string()
+        } else {
+            doctor_report.advisories.join(", ")
         }
     );
 

@@ -4,7 +4,7 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 
 use crate::media::{ensure_ffmpeg_available, ffmpeg_supports_filter, subtitles_filter, video_size};
-use crate::runtime::{command_exists, ensure_dir, tmp_dir};
+use crate::runtime::{MAGICK_DEPENDENCY, ensure_dependency, ensure_dir, tmp_dir};
 use crate::subtitles::{SubtitleCue, parse_srt_file};
 
 const DEFAULT_FONT_PATH: &str = "/System/Library/Fonts/Helvetica.ttc";
@@ -58,9 +58,7 @@ fn burn_in_with_overlay_fallback(
     subs: &Path,
     output: &Path,
 ) -> Result<()> {
-    if !command_exists("magick") {
-        bail!("ffmpeg subtitles filter is unavailable and ImageMagick `magick` was not found");
-    }
+    ensure_dependency(MAGICK_DEPENDENCY)?;
 
     let cues = parse_srt_file(subs)?;
     if cues.is_empty() {

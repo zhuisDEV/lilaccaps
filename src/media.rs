@@ -3,15 +3,11 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
-use crate::runtime::command_exists;
+use crate::runtime::{FFMPEG_DEPENDENCY, FFPROBE_DEPENDENCY, ensure_dependency};
 
 pub fn ensure_ffmpeg_available() -> Result<()> {
-    if !command_exists("ffmpeg") {
-        bail!("ffmpeg is required but was not found on PATH");
-    }
-    if !command_exists("ffprobe") {
-        bail!("ffprobe is required but was not found on PATH");
-    }
+    ensure_dependency(FFMPEG_DEPENDENCY)?;
+    ensure_dependency(FFPROBE_DEPENDENCY)?;
     Ok(())
 }
 

@@ -5,8 +5,12 @@ use anyhow::{Context, Result, bail};
 use crate::cli::UpdateArgs;
 use crate::config::load_config;
 use crate::release::{latest_release, normalize_github_repo};
+use crate::runtime::{CARGO_DEPENDENCY, CMAKE_DEPENDENCY, ensure_dependency};
 
 pub fn run(args: UpdateArgs) -> Result<()> {
+    ensure_dependency(CARGO_DEPENDENCY)?;
+    ensure_dependency(CMAKE_DEPENDENCY)?;
+
     let loaded = load_config(args.config_path)?;
     let repo = loaded
         .config

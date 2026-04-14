@@ -11,6 +11,8 @@
 
 The command model stays explicit:
 
+- `lilaccaps doctor` inspects local prerequisites and setup health
+- `lilaccaps doctor --fix` installs missing macOS packages through Homebrew when possible
 - `lilaccaps transcribe` generates subtitle artifacts such as `.srt`
 - `lilaccaps burnin` is render-only and never hides transcription inside the command
 
@@ -50,9 +52,31 @@ brew install ffmpeg cmake imagemagick
 Build locally and install with cargo:
 
 ```bash
+brew install ffmpeg cmake imagemagick
 cargo install --path .
 lilaccaps install
 ```
+
+If `cmake` is missing, `cargo install` fails while compiling `whisper-rs-sys` before the
+`lilaccaps` binary exists. Install prerequisites first, then rerun `cargo install`.
+
+After the binary exists, you can inspect or repair prerequisites with:
+
+```bash
+lilaccaps doctor
+lilaccaps doctor --fix
+lilaccaps install --fix
+```
+
+`--fix` currently supports macOS through Homebrew and installs only the missing packages
+that `lilaccaps` maps explicitly.
+
+After installation, `lilaccaps status` reports:
+
+- core runtime readiness (`healthy`, `missing`)
+- build/update readiness (`cargo_available`, `cmake_available`, `build_ready`)
+- fallback renderer readiness (`magick_available`, `fallback_renderer_ready`)
+- fixability (`brew_packages`, `can_fix_with_brew`)
 
 This initializes:
 
@@ -79,6 +103,7 @@ Check environment health:
 
 ```bash
 lilaccaps status
+lilaccaps doctor
 ```
 
 ## Configuration

@@ -76,3 +76,11 @@ The next implementation should leave the repo with:
 - separate caption and render modules
 - exact artifact paths in output
 - room to add fallback cleanly later
+
+## Current Handoff Notes
+- Native tool prerequisites are now surfaced explicitly in CLI status and preflight checks.
+- `cargo install` still cannot be intercepted by the CLI before compilation, so README guidance must stay accurate and prominent for `cmake`.
+- `status` distinguishes core runtime health from build/update readiness and fallback renderer readiness.
+- Runtime dependency tests should use synthetic missing commands so they remain stable across developer machines.
+- `doctor` is the shared prerequisite inspection entrypoint; `install` should reuse it instead of reintroducing bespoke dependency checks.
+- Automatic prerequisite repair is intentionally limited to macOS plus Homebrew and only for explicitly mapped packages.

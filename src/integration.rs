@@ -58,6 +58,7 @@ pub fn write_bootstrap_markdown(paths: &ConfigPaths, config: &Config) -> Result<
 - `magick`: fallback burn-in renderer when the local `ffmpeg` build does not include the `subtitles` filter\n\n\
 ## Install guidance\n\
 - macOS with Homebrew: `brew install ffmpeg cmake imagemagick`\n\
+- after the binary is installed, `lilaccaps doctor --fix` can install missing Homebrew packages automatically\n\
 - confirm tool availability before use:\n\
   - `cargo --version`\n\
   - `ffmpeg -version`\n\
@@ -72,13 +73,19 @@ pub fn write_bootstrap_markdown(paths: &ConfigPaths, config: &Config) -> Result<
 1. Confirm `LILACCAPS_HOME` if you need a non-default runtime directory.\n\
 2. Place or link the lilaccaps skill at the configured skill path, or let `lilaccaps install` generate it.\n\
 3. Run `lilaccaps install` to initialize config, runtime folders, the model, and the generated skill file.\n\
-4. Run `lilaccaps status` to verify config and integration health.\n\n\
+4. Run `lilaccaps doctor` or `lilaccaps status` to verify config and integration health.\n\n\
 ## Expected healthy status\n\
 - installed = true\n\
+- cargo_available = true\n\
 - ffmpeg_available = true\n\
 - ffprobe_available = true\n\
+- cmake_available = true\n\
+- build_ready = true\n\
+- can_fix_with_brew = true or false depending on whether Homebrew is available\n\
 - model_ready = true\n\
-- missing = none\n",
+- missing = none\n\
+- brew_packages = none\n\
+- advisories = none\n",
         paths.config_path.display(),
         paths.runtime_home.display(),
         config.agent.skill_path.display(),
@@ -107,7 +114,7 @@ pub fn ensure_skill_file(config: &Config) -> Result<PathBuf> {
     }
 
     let content = format!(
-        "{GENERATED_SKILL_MARKER}\n# lilaccaps\n\nUse the `lilaccaps` CLI for transcription and subtitle rendering.\n\n## Commands\n- `lilaccaps status`\n- `lilaccaps transcribe <input>`\n- `lilaccaps burnin <video> --subs <subtitle-file>`\n\n## Notes\n- `burnin` is render-only.\n- transcription is a separate workflow.\n- runtime home is configured via `lilaccaps.toml` and `LILACCAPS_HOME`.\n"
+        "{GENERATED_SKILL_MARKER}\n# lilaccaps\n\nUse the `lilaccaps` CLI for transcription and subtitle rendering.\n\n## Commands\n- `lilaccaps doctor`\n- `lilaccaps status`\n- `lilaccaps transcribe <input>`\n- `lilaccaps burnin <video> --subs <subtitle-file>`\n\n## Notes\n- `burnin` is render-only.\n- transcription is a separate workflow.\n- runtime home is configured via `lilaccaps.toml` and `LILACCAPS_HOME`.\n"
     );
 
     fs::write(skill_path, content)

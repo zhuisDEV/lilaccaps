@@ -18,6 +18,7 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    Doctor(DoctorArgs),
     Install(InstallArgs),
     Update(UpdateArgs),
     Status(StatusArgs),
@@ -27,9 +28,19 @@ enum Command {
 }
 
 #[derive(Debug, Clone, Args)]
+pub struct DoctorArgs {
+    #[arg(long)]
+    pub config_path: Option<PathBuf>,
+    #[arg(long)]
+    pub fix: bool,
+}
+
+#[derive(Debug, Clone, Args)]
 pub struct InstallArgs {
     #[arg(long)]
     pub config_path: Option<PathBuf>,
+    #[arg(long)]
+    pub fix: bool,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -78,6 +89,7 @@ pub fn run() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Command::Doctor(args) => commands::doctor::run(args),
         Command::Install(args) => commands::install::run(args),
         Command::Update(args) => commands::update::run(args),
         Command::Status(args) => commands::status::run(args),

@@ -1,18 +1,44 @@
 use std::env;
 use std::fs;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 
 use crate::cli::InstallArgs;
 use crate::config::{LoadedConfig, load_or_init_config};
 use crate::integration::{ensure_skill_file, write_bootstrap_markdown};
-use crate::media::ensure_ffmpeg_available;
 use crate::model::ensure_model_downloaded;
 use crate::runtime::{
-    cargo_bin_dir, current_executable, ensure_dir, install_binary_path, models_dir, tmp_dir,
+    cargo_bin_dir, collect_doctor_report, current_executable, ensure_dir,
+    fix_missing_dependencies_with_brew, install_binary_path, models_dir, tmp_dir,
 };
 
 pub fn run(args: InstallArgs) -> Result<()> {
+    let mut report = collect_doctor_report();
+    let mut fixed_packages = Vec::new();
+    if args.fix && !report.brew_packages.is_empty() {
+        fixed_packages = fix_missing_dependencies_with_brew(&report)?;
+        report = collect_doctor_report();
+    }
+
+    if !report.missing_commands.is_empty() {
+        let hint = if report.can_fix_with_brew {
+            format!(
+                "run `lilaccaps install --fix` or `brew install {}`",
+                report.brew_packages.join(" ")
+            )
+        } else if cfg!(target_os = "macos") {
+            "install Homebrew from https://brew.sh or install the missing prerequisites manually"
+                .to_string()
+        } else {
+            "install the missing prerequisites with your platform package manager".to_string()
+        };
+        bail!(
+            "missing prerequisites: {}. To continue, {}.",
+            report.missing_commands.join(", "),
+            hint
+        );
+    }
+
     let LoadedConfig {
         paths,
         config,
@@ -23,7 +49,6 @@ pub fn run(args: InstallArgs) -> Result<()> {
     ensure_dir(&models_dir(&paths.runtime_home))?;
     ensure_dir(&tmp_dir(&paths.runtime_home))?;
     ensure_dir(&cargo_bin_dir()?)?;
-    ensure_ffmpeg_available()?;
 
     let bootstrap_path = write_bootstrap_markdown(&paths, &config)?;
     let binary_path = install_binary()?;
@@ -38,6 +63,14 @@ pub fn run(args: InstallArgs) -> Result<()> {
     println!("skill_path = {}", skill_path.display());
     println!("bootstrap_path = {}", bootstrap_path.display());
     println!("config_created = {}", created);
+    println!(
+        "fixed_packages = {}",
+        if fixed_packages.is_empty() {
+            "none".to_string()
+        } else {
+            fixed_packages.join(", ")
+        }
+    );
 
     Ok(())
 }
