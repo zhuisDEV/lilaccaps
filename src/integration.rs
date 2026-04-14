@@ -1,0 +1,133 @@
+use std::env;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
+
+use crate::config::{AgentConfig, Config, ConfigPaths, expand_home};
+use crate::runtime::ensure_dir;
+
+const GENERATED_SKILL_MARKER: &str = "<!-- generated-by-lilaccaps -->";
+
+pub fn default_skill_path() -> Result<PathBuf> {
+    if let Ok(openclaw_home) = env::var("OPENCLAW_HOME") {
+        return Ok(PathBuf::from(openclaw_home)
+            .join("skills")
+            .join("lilaccaps")
+            .join("SKILL.md"));
+    }
+
+    expand_home(std::path::Path::new(
+        "~/.openclaw/skills/lilaccaps/SKILL.md",
+    ))
+}
+
+pub fn detect_skill_path(agent: &AgentConfig) -> Option<PathBuf> {
+    let configured = &agent.skill_path;
+    if configured.exists() {
+        return Some(configured.clone());
+    }
+
+    let default = default_skill_path().ok()?;
+    if default.exists() {
+        return Some(default);
+    }
+
+    None
+}
+
+pub fn write_bootstrap_markdown(paths: &ConfigPaths, config: &Config) -> Result<PathBuf> {
+    let bootstrap_path = paths.runtime_home.join("bootstrap.md");
+    let content = format!(
+        "# lilaccaps bootstrap\n\n\
+## Config\n\
+- config: `{}`\n\
+- runtime home: `{}`\n\
+- skill path: `{}`\n\n\
+## Required dependencies\n\
+- Rust toolchain with `cargo`\n\
+- `ffmpeg`\n\
+- `ffprobe`\n\
+- `cmake`\n\
+- ImageMagick `magick`\n\n\
+## Why they are needed\n\
+- `cargo`: build and install the `lilaccaps` binary\n\
+- `ffmpeg`: extract audio and render final video output\n\
+- `ffprobe`: inspect media streams and video dimensions\n\
+- `cmake`: build `whisper-rs` and its native `whisper.cpp` dependency\n\
+- `magick`: fallback burn-in renderer when the local `ffmpeg` build does not include the `subtitles` filter\n\n\
+## Install guidance\n\
+- macOS with Homebrew: `brew install ffmpeg cmake imagemagick`\n\
+- confirm tool availability before use:\n\
+  - `cargo --version`\n\
+  - `ffmpeg -version`\n\
+  - `ffprobe -version`\n\
+  - `cmake --version`\n\
+  - `magick -version`\n\n\
+## Runtime assets\n\
+- Whisper model is managed under `{}/models`\n\
+- temporary working files are stored under `{}/tmp`\n\
+- config is stored in `lilaccaps.toml`\n\n\
+## OpenClaw setup\n\
+1. Confirm `LILACCAPS_HOME` if you need a non-default runtime directory.\n\
+2. Place or link the lilaccaps skill at the configured skill path, or let `lilaccaps install` generate it.\n\
+3. Run `lilaccaps install` to initialize config, runtime folders, the model, and the generated skill file.\n\
+4. Run `lilaccaps status` to verify config and integration health.\n\n\
+## Expected healthy status\n\
+- installed = true\n\
+- ffmpeg_available = true\n\
+- ffprobe_available = true\n\
+- model_ready = true\n\
+- missing = none\n",
+        paths.config_path.display(),
+        paths.runtime_home.display(),
+        config.agent.skill_path.display(),
+        paths.runtime_home.display(),
+        paths.runtime_home.display()
+    );
+
+    fs::write(&bootstrap_path, content).with_context(|| {
+        format!(
+            "failed to write bootstrap instructions to {}",
+            bootstrap_path.display()
+        )
+    })?;
+
+    Ok(bootstrap_path)
+}
+
+pub fn ensure_skill_file(config: &Config) -> Result<PathBuf> {
+    let skill_path = &config.agent.skill_path;
+    if skill_path.exists() {
+        return Ok(skill_path.clone());
+    }
+
+    if let Some(parent) = skill_path.parent() {
+        ensure_dir(parent)?;
+    }
+
+    let content = format!(
+        "{GENERATED_SKILL_MARKER}\n# lilaccaps\n\nUse the `lilaccaps` CLI for subtitle generation and burn-in.\n\n## Commands\n- `lilaccaps status`\n- `lilaccaps captions <input>`\n- `lilaccaps burnin <video> --subs <subtitle-file>`\n\n## Notes\n- `burnin` is render-only.\n- caption generation is a separate workflow.\n- runtime home is configured via `lilaccaps.toml` and `LILACCAPS_HOME`.\n"
+    );
+
+    fs::write(skill_path, content)
+        .with_context(|| format!("failed to write skill file {}", skill_path.display()))?;
+
+    Ok(skill_path.clone())
+}
+
+pub fn remove_generated_skill_file(path: &Path) -> Result<bool> {
+    if !path.exists() {
+        return Ok(false);
+    }
+
+    let raw = fs::read_to_string(path)
+        .with_context(|| format!("failed to inspect skill file {}", path.display()))?;
+    if !raw.contains(GENERATED_SKILL_MARKER) {
+        return Ok(false);
+    }
+
+    fs::remove_file(path)
+        .with_context(|| format!("failed to remove generated skill file {}", path.display()))?;
+    Ok(true)
+}
