@@ -2,7 +2,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+use whisper_rs::{
+    FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, get_lang_id,
+};
 
 use crate::config::load_or_init_config;
 use crate::media::{ensure_ffmpeg_available, extract_audio_to_wav};
@@ -15,6 +17,7 @@ pub struct TranscribeOutput {
     pub input: PathBuf,
     pub output: PathBuf,
     pub model_path: PathBuf,
+    pub language: String,
     pub status: &'static str,
 }
 
@@ -22,6 +25,7 @@ pub fn run(
     input: PathBuf,
     config_path: Option<PathBuf>,
     output: Option<PathBuf>,
+    lang: Option<String>,
 ) -> Result<TranscribeOutput> {
     if !input.exists() {
         bail!("input media does not exist: {}", input.display());
@@ -44,14 +48,16 @@ pub fn run(
 
     let model_path = ensure_model_downloaded(&loaded.paths, &loaded.config)?;
     let audio_path = temp_audio_path(&loaded.paths.runtime_home, &input);
+    let language = resolve_language(lang.as_deref(), Some(&loaded.config.transcribe.language))?;
     extract_audio_to_wav(&input, &audio_path)?;
-    let cues = transcribe_to_cues(&model_path, &audio_path)?;
+    let cues = transcribe_to_cues(&model_path, &audio_path, language.as_deref())?;
     write_srt_file(&output, &cues)?;
 
     Ok(TranscribeOutput {
         input,
         output,
         model_path,
+        language: language.unwrap_or_else(|| "auto".to_string()),
         status: "generated",
     })
 }
@@ -72,7 +78,11 @@ fn temp_audio_path(runtime_home: &Path, input: &Path) -> PathBuf {
     tmp_dir(runtime_home).join(format!("{stem}.mono16k.wav"))
 }
 
-fn transcribe_to_cues(model_path: &Path, audio_path: &Path) -> Result<Vec<SubtitleCue>> {
+fn transcribe_to_cues(
+    model_path: &Path,
+    audio_path: &Path,
+    language: Option<&str>,
+) -> Result<Vec<SubtitleCue>> {
     let samples: Vec<i16> = hound::WavReader::open(audio_path)
         .with_context(|| format!("failed to open extracted wav {}", audio_path.display()))?
         .into_samples::<i16>()
@@ -103,6 +113,8 @@ fn transcribe_to_cues(model_path: &Path, audio_path: &Path) -> Result<Vec<Subtit
     params.set_print_realtime(false);
     params.set_print_timestamps(false);
     params.set_translate(false);
+    params.set_language(language);
+    params.set_detect_language(language.is_none());
     params.set_n_threads(num_cpus::get_physical() as i32);
 
     state
@@ -133,4 +145,49 @@ fn transcribe_to_cues(model_path: &Path, audio_path: &Path) -> Result<Vec<Subtit
     }
 
     Ok(cues)
+}
+
+fn resolve_language(cli_lang: Option<&str>, config_lang: Option<&str>) -> Result<Option<String>> {
+    let raw = cli_lang
+        .or(config_lang)
+        .unwrap_or("auto")
+        .trim()
+        .to_lowercase();
+    if raw.is_empty() || raw == "auto" {
+        return Ok(None);
+    }
+
+    if get_lang_id(&raw).is_none() {
+        bail!(
+            "unsupported transcription language `{raw}`; use `auto` or a Whisper language code such as `en`, `zh`, or `ja`"
+        );
+    }
+
+    Ok(Some(raw))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_language;
+
+    #[test]
+    fn cli_language_overrides_config_language() {
+        let resolved = resolve_language(Some("zh"), Some("en")).expect("language should resolve");
+        assert_eq!(resolved.as_deref(), Some("zh"));
+    }
+
+    #[test]
+    fn auto_language_maps_to_detection() {
+        let resolved = resolve_language(Some("auto"), Some("en")).expect("language should resolve");
+        assert_eq!(resolved, None);
+    }
+
+    #[test]
+    fn invalid_language_is_rejected() {
+        let err = resolve_language(Some("notalanguage"), None).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("unsupported transcription language")
+        );
+    }
 }

@@ -91,6 +91,7 @@ Transcribe into subtitles:
 
 ```bash
 lilaccaps transcribe ./input.mp4
+lilaccaps transcribe ./input.mp4 --lang zh
 ```
 
 Burn in an existing subtitle file:
@@ -115,10 +116,15 @@ Important values:
 - `runtime.home`
 - `agent.skill_path`
 - `release.github_repo`
+- `transcribe.language`
 - `transcribe.model.id`
 - `transcribe.model.path`
 
 `LILACCAPS_HOME` overrides the runtime home at runtime.
+
+`transcribe.language` defaults to `"auto"`. Set it to a Whisper language code such as
+`"en"`, `"zh"`, or `"ja"` to force transcription in a specific language. `--lang` on
+`lilaccaps transcribe` overrides the config value for a single run.
 
 ## Repository Layout
 

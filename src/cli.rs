@@ -72,6 +72,8 @@ pub struct TranscribeArgs {
     pub config_path: Option<PathBuf>,
     #[arg(long)]
     pub output: Option<PathBuf>,
+    #[arg(long = "lang", visible_alias = "language")]
+    pub lang: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]

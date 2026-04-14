@@ -50,6 +50,8 @@ pub struct ReleaseConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranscribeConfig {
+    #[serde(default = "default_transcribe_language")]
+    pub language: String,
     pub model: ModelConfig,
 }
 
@@ -128,6 +130,7 @@ pub fn default_config() -> Result<Config> {
         agent: AgentConfig { skill_path },
         release: ReleaseConfig { github_repo },
         transcribe: TranscribeConfig {
+            language: default_transcribe_language(),
             model: ModelConfig {
                 id: "base".to_string(),
                 path: None,
@@ -138,6 +141,10 @@ pub fn default_config() -> Result<Config> {
 
 pub fn default_runtime_home() -> Result<PathBuf> {
     expand_home(Path::new(DEFAULT_RUNTIME_HOME))
+}
+
+pub fn default_transcribe_language() -> String {
+    "auto".to_string()
 }
 
 pub fn default_config_path() -> Result<PathBuf> {
@@ -172,7 +179,7 @@ pub fn expand_home(path: &Path) -> Result<PathBuf> {
 mod tests {
     use std::path::Path;
 
-    use super::{default_config_path, default_runtime_home, expand_home};
+    use super::{Config, default_config, default_config_path, default_runtime_home, expand_home};
 
     #[test]
     fn expands_tilde_paths() {
@@ -186,5 +193,31 @@ mod tests {
         let runtime_home = default_runtime_home().expect("runtime home should resolve");
         let config_path = default_config_path().expect("config path should resolve");
         assert_eq!(config_path, runtime_home.join("lilaccaps.toml"));
+    }
+
+    #[test]
+    fn default_config_uses_auto_language_detection() {
+        let config = default_config().expect("default config should build");
+        assert_eq!(config.transcribe.language, "auto");
+    }
+
+    #[test]
+    fn older_config_without_language_still_parses() {
+        let raw = r#"
+[runtime]
+home = "/tmp/lilaccaps"
+
+[agent]
+skill_path = "/tmp/SKILL.md"
+
+[release]
+github_repo = "zhuisDEV/lilaccaps"
+
+[transcribe.model]
+id = "base"
+"#;
+
+        let config: Config = toml::from_str(raw).expect("older config should parse");
+        assert_eq!(config.transcribe.language, "auto");
     }
 }

@@ -85,3 +85,5 @@ The next implementation should leave the repo with:
 - `doctor` is the shared prerequisite inspection entrypoint; `install` should reuse it instead of reintroducing bespoke dependency checks.
 - Automatic prerequisite repair is intentionally limited to macOS plus Homebrew and only for explicitly mapped packages.
 - The default config path now lives under the runtime home at `~/.lilac/lilaccaps/lilaccaps.toml`.
+- Transcription language now supports config default plus per-run CLI override via `--lang`; `"auto"` preserves Whisper auto-detection.
+- Config schema changes must stay backward-compatible on read; older configs missing `transcribe.language` should default to `"auto"` instead of breaking `update`.
