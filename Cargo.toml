@@ -1,7 +1,14 @@
 [package]
 name = "lilaccaps"
 version = "0.1.0"
+description = "Rust CLI for generating captions and burning subtitles into video"
 edition = "2024"
+license = "MIT"
+repository = "https://github.com/zhuisDEV/lilaccaps"
+homepage = "https://github.com/zhuisDEV/lilaccaps"
+readme = "README.md"
+keywords = ["subtitles", "captions", "video", "ffmpeg", "whisper"]
+categories = ["command-line-utilities", "multimedia::video"]
 
 [dependencies]
 anyhow = "1.0.100"

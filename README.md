@@ -1,0 +1,128 @@
+# lilaccaps
+
+[![CI](https://github.com/zhuisDEV/lilaccaps/actions/workflows/ci.yml/badge.svg)](https://github.com/zhuisDEV/lilaccaps/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![Rust](https://img.shields.io/badge/language-Rust-orange.svg)](https://www.rust-lang.org/)
+
+`lilaccaps` is a clean Rust CLI for two separate workflows:
+
+1. generate captions from local video or audio
+2. burn an existing subtitle file into a video
+
+The command model stays explicit:
+
+- `lilaccaps captions` generates subtitle artifacts such as `.srt`
+- `lilaccaps burnin` is render-only and never hides caption generation inside the command
+
+## Project Cards
+
+| Captions | Burn-in | Lifecycle |
+| --- | --- | --- |
+| Extract audio with `ffmpeg`, transcribe with Whisper, write `.srt` | Render an existing subtitle file into video | Install, status, update, and uninstall support |
+| Primary flow stays subtitle-first | Primary renderer uses `ffmpeg` subtitle filters when available | Configured with `lilaccaps.toml` and `LILACCAPS_HOME` |
+| Output path is explicit | Fallback renderer uses ImageMagick overlays when needed | OpenClaw skill bootstrap is supported |
+
+## Features
+
+- Unified CLI under `lilaccaps`
+- `captions` and `burnin` kept as separate first-class workflows
+- Managed Whisper model download under the runtime home
+- Runtime health checks through `lilaccaps status`
+- Generated OpenClaw skill bootstrap
+- Clean primary and fallback separation for rendering
+
+## Requirements
+
+- Rust toolchain with `cargo`
+- `ffmpeg`
+- `ffprobe`
+- `cmake`
+- ImageMagick `magick`
+
+On macOS with Homebrew:
+
+```bash
+brew install ffmpeg cmake imagemagick
+```
+
+## Install
+
+Build locally and install with cargo:
+
+```bash
+cargo install --path .
+lilaccaps install
+```
+
+This initializes:
+
+- `lilaccaps.toml`
+- runtime home, defaulting to `~/.lilac/lilaccaps`
+- Whisper model assets under the runtime home
+- OpenClaw skill bootstrap files
+
+## Usage
+
+Generate captions:
+
+```bash
+lilaccaps captions ./input.mp4
+```
+
+Burn in an existing subtitle file:
+
+```bash
+lilaccaps burnin ./input.mp4 --subs ./input.srt
+```
+
+Check environment health:
+
+```bash
+lilaccaps status
+```
+
+## Configuration
+
+The config file is `lilaccaps.toml`.
+
+Important values:
+
+- `runtime.home`
+- `agent.skill_path`
+- `release.github_repo`
+- `captions.model.id`
+- `captions.model.path`
+
+`LILACCAPS_HOME` overrides the runtime home at runtime.
+
+## Repository Layout
+
+```text
+src/
+  commands/
+  pipelines/
+  media.rs
+  model.rs
+  render.rs
+  subtitles.rs
+```
+
+Supporting planning docs:
+
+- [lilaccaps-plan.md](./lilaccaps-plan.md)
+- [handoff.md](./handoff.md)
+- [video-subtitle-pipeline-proposal.md](./video-subtitle-pipeline-proposal.md)
+
+## Status
+
+This project is usable now for:
+
+- local caption generation to `.srt`
+- burn-in rendering from existing `.srt`
+- installation and environment health reporting
+
+The current implementation favors clean boundaries over broad convenience wrappers.
+
+## License
+
+MIT. See [LICENSE](./LICENSE).
