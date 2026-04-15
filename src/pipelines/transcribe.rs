@@ -24,6 +24,14 @@ pub struct TranscribeOutput {
     pub status: &'static str,
 }
 
+#[derive(Debug, Clone)]
+struct AttemptDiagnostics {
+    language: String,
+    decoding_strategy: &'static str,
+    segment_count: usize,
+    non_empty_segments: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DecodeStrategy {
     BeamSearch,
@@ -36,6 +44,19 @@ impl DecodeStrategy {
             Self::BeamSearch => "beam",
             Self::Greedy => "greedy",
         }
+    }
+}
+
+impl AttemptDiagnostics {
+    fn summary(&self) -> String {
+        format!(
+            "language={} decoding={} total_segments={} non_empty_segments={} blank_segments={}",
+            self.language,
+            self.decoding_strategy,
+            self.segment_count,
+            self.non_empty_segments,
+            self.segment_count.saturating_sub(self.non_empty_segments)
+        )
     }
 }
 
@@ -131,8 +152,10 @@ fn transcribe_to_cues(
         attempts.push((None, true, DecodeStrategy::Greedy));
     }
 
+    let mut diagnostics = Vec::new();
     for (attempt_language, fallback_used, strategy) in attempts {
-        let cues = transcribe_once(&ctx, &audio, attempt_language, strategy)?;
+        let (cues, attempt_diagnostics) =
+            transcribe_once(&ctx, &audio, attempt_language, strategy)?;
         if !cues.is_empty() {
             return Ok((
                 cues,
@@ -141,9 +164,17 @@ fn transcribe_to_cues(
                 strategy.label(),
             ));
         }
+        diagnostics.push(attempt_diagnostics);
     }
 
-    bail!("whisper returned no subtitle segments after trying beam and greedy decoding")
+    let summary = diagnostics
+        .iter()
+        .map(AttemptDiagnostics::summary)
+        .collect::<Vec<_>>()
+        .join(" | ");
+    bail!(
+        "whisper returned no subtitle segments after trying beam and greedy decoding. attempt_diagnostics = {summary}"
+    )
 }
 
 fn transcribe_once(
@@ -151,7 +182,7 @@ fn transcribe_once(
     audio: &[f32],
     language: Option<&str>,
     strategy: DecodeStrategy,
-) -> Result<Vec<SubtitleCue>> {
+) -> Result<(Vec<SubtitleCue>, AttemptDiagnostics)> {
     let mut state = ctx
         .create_state()
         .context("failed to create whisper state")?;
@@ -176,12 +207,18 @@ fn transcribe_once(
         .full(params, audio)
         .context("failed to transcribe audio with whisper")?;
 
-    collect_cues(&state)
+    collect_cues(&state, language, strategy)
 }
 
-fn collect_cues(state: &whisper_rs::WhisperState) -> Result<Vec<SubtitleCue>> {
+fn collect_cues(
+    state: &whisper_rs::WhisperState,
+    language: Option<&str>,
+    strategy: DecodeStrategy,
+) -> Result<(Vec<SubtitleCue>, AttemptDiagnostics)> {
     let mut cues = Vec::new();
+    let mut segment_count = 0usize;
     for (index, segment) in state.as_iter().enumerate() {
+        segment_count += 1;
         let text = segment
             .to_str_lossy()
             .context("failed to decode whisper segment text")?
@@ -199,7 +236,15 @@ fn collect_cues(state: &whisper_rs::WhisperState) -> Result<Vec<SubtitleCue>> {
         });
     }
 
-    Ok(cues)
+    Ok((
+        cues.clone(),
+        AttemptDiagnostics {
+            language: language.unwrap_or("auto").to_string(),
+            decoding_strategy: strategy.label(),
+            segment_count,
+            non_empty_segments: cues.len(),
+        },
+    ))
 }
 
 fn resolve_language(cli_lang: Option<&str>, config_lang: Option<&str>) -> Result<Option<String>> {
@@ -223,7 +268,7 @@ fn resolve_language(cli_lang: Option<&str>, config_lang: Option<&str>) -> Result
 
 #[cfg(test)]
 mod tests {
-    use super::{DecodeStrategy, resolve_language};
+    use super::{AttemptDiagnostics, DecodeStrategy, resolve_language};
 
     #[test]
     fn cli_language_overrides_config_language() {
@@ -250,5 +295,19 @@ mod tests {
     fn decode_strategy_labels_are_stable() {
         assert_eq!(DecodeStrategy::BeamSearch.label(), "beam");
         assert_eq!(DecodeStrategy::Greedy.label(), "greedy");
+    }
+
+    #[test]
+    fn attempt_diagnostics_summary_includes_blank_segments() {
+        let diagnostics = AttemptDiagnostics {
+            language: "zh".to_string(),
+            decoding_strategy: "beam",
+            segment_count: 4,
+            non_empty_segments: 1,
+        };
+        let summary = diagnostics.summary();
+        assert!(summary.contains("language=zh"));
+        assert!(summary.contains("decoding=beam"));
+        assert!(summary.contains("blank_segments=3"));
     }
 }
