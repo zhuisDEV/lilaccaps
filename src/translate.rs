@@ -1,4 +1,5 @@
 use std::env;
+use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use reqwest::blocking::Client;
@@ -48,13 +49,17 @@ struct TranslationPayload {
 }
 
 pub fn translate_lines(
+    runtime_home: &Path,
     model: &str,
     target_language: &str,
     lines: &[String],
 ) -> Result<Vec<String>> {
-    dotenvy::dotenv().ok();
+    load_dotenv(runtime_home);
     let api_key = env::var(GEMINI_API_KEY_ENV).with_context(|| {
-        format!("{GEMINI_API_KEY_ENV} is not set. Add it to your environment or a local .env file.")
+        format!(
+            "{GEMINI_API_KEY_ENV} is not set. Add it to your environment or {}/.env.",
+            runtime_home.display()
+        )
     })?;
 
     if lines.is_empty() {
@@ -116,6 +121,16 @@ pub fn translate_lines(
         .into_iter()
         .map(|line| line.trim().to_string())
         .collect())
+}
+
+fn load_dotenv(runtime_home: &Path) {
+    let runtime_env = runtime_home.join(".env");
+    if runtime_env.exists() {
+        let _ = dotenvy::from_path_override(runtime_env);
+        return;
+    }
+
+    let _ = dotenvy::dotenv_override();
 }
 
 fn build_translation_prompt(target_language: &str, lines: &[String]) -> String {

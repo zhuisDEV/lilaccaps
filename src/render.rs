@@ -19,6 +19,22 @@ const LATIN_FONT_CANDIDATES: [&str; 2] = [
     "/System/Library/Fonts/HelveticaNeue.ttc",
 ];
 
+const PINGFANG_FONT_CANDIDATES: [&str; 2] = [
+    "/System/Library/AssetsV2/com_apple_MobileAsset_Font8/86ba2c91f017a3749571a82f2c6d890ac7ffb2fb.asset/AssetData/PingFang.ttc",
+    "/System/Library/Fonts/PingFang.ttc",
+];
+
+const ARIAL_FONT_CANDIDATES: [&str; 3] = [
+    "/System/Library/Fonts/Supplemental/Arial.ttf",
+    "/Library/Fonts/Arial.ttf",
+    "/Library/Fonts/Arial Unicode.ttf",
+];
+
+const HIRAGINO_SANS_FONT_CANDIDATES: [&str; 2] = [
+    "/System/Library/Fonts/Hiragino Sans GB.ttc",
+    "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+];
+
 #[derive(Debug, Clone)]
 pub struct BurninStyle {
     pub font: Option<String>,
@@ -167,14 +183,15 @@ fn render_overlay_image(
                 .font
                 .as_deref()
                 .or(style.font.as_deref())
-                .unwrap_or_else(|| select_overlay_font(line));
+                .map(|font| resolve_overlay_font(font, line))
+                .unwrap_or_else(|| select_overlay_font(line).to_string());
             let point_size = line_style.size.or(style.size).unwrap_or(default_point_size);
             command
                 .arg("(")
                 .arg("-background")
                 .arg("none")
                 .arg("-font")
-                .arg(font_path)
+                .arg(&font_path)
                 .arg("-fill")
                 .arg("white")
                 .arg("-stroke")
@@ -183,11 +200,11 @@ fn render_overlay_image(
                 .arg("2")
                 .arg("-pointsize")
                 .arg(point_size.to_string())
+                .arg(format!("label:{line}"))
                 .arg("-bordercolor")
                 .arg("none")
                 .arg("-border")
                 .arg("0x4")
-                .arg(format!("label:{line}"))
                 .arg(")");
         }
 
@@ -201,12 +218,13 @@ fn render_overlay_image(
         let font_path = style
             .font
             .as_deref()
-            .unwrap_or_else(|| select_overlay_font(&cue.text));
+            .map(|font| resolve_overlay_font(font, &cue.text))
+            .unwrap_or_else(|| select_overlay_font(&cue.text).to_string());
         command
             .arg("-background")
             .arg("none")
             .arg("-font")
-            .arg(font_path)
+            .arg(&font_path)
             .arg("-fill")
             .arg("white")
             .arg("-stroke")
@@ -333,6 +351,43 @@ fn select_overlay_font(text: &str) -> &'static str {
         .unwrap_or(LATIN_FONT_CANDIDATES[0])
 }
 
+fn resolve_overlay_font(requested: &str, sample_text: &str) -> String {
+    let trimmed = requested.trim();
+    if trimmed.is_empty() {
+        return select_overlay_font(sample_text).to_string();
+    }
+
+    if Path::new(trimmed).exists() {
+        return trimmed.to_string();
+    }
+
+    if let Some(path) = named_font_candidates(trimmed)
+        .iter()
+        .copied()
+        .find(|path| Path::new(path).exists())
+    {
+        return path.to_string();
+    }
+
+    select_overlay_font(sample_text).to_string()
+}
+
+fn named_font_candidates(requested: &str) -> &'static [&'static str] {
+    match normalize_font_name(requested).as_str() {
+        "pingfangsc" | "pingfang" => &PINGFANG_FONT_CANDIDATES,
+        "arial" => &ARIAL_FONT_CANDIDATES,
+        "hiraginosans" | "hiraginosansgb" => &HIRAGINO_SANS_FONT_CANDIDATES,
+        _ => &[],
+    }
+}
+
+fn normalize_font_name(raw: &str) -> String {
+    raw.chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
 fn is_cjk_or_korean_or_japanese(ch: char) -> bool {
     matches!(
         ch as u32,
@@ -351,7 +406,7 @@ fn is_cjk_or_korean_or_japanese(ch: char) -> bool {
 mod tests {
     use super::{
         BurninStyle, LineStyle, is_cjk_or_korean_or_japanese, line_style_for_index,
-        select_overlay_font,
+        named_font_candidates, select_overlay_font,
     };
     use std::collections::HashMap;
 
@@ -389,5 +444,11 @@ mod tests {
         let line_style = line_style_for_index(&style, 1, "English");
         assert_eq!(line_style.font.as_deref(), Some("Arial"));
         assert_eq!(line_style.size, Some(30));
+    }
+
+    #[test]
+    fn maps_named_font_aliases_to_candidates() {
+        assert!(!named_font_candidates("PingFang SC").is_empty());
+        assert!(!named_font_candidates("Arial").is_empty());
     }
 }

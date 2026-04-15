@@ -71,8 +71,8 @@ pub fn write_bootstrap_markdown(paths: &ConfigPaths, config: &Config) -> Result<
 - temporary working files are stored under `{}/tmp`\n\
 - config is stored in `lilaccaps.toml`\n\n\
 ## API credentials\n\
-- create a local `.env` file or export `GEMINI_API_KEY`\n\
-- `lilaccaps translate` loads `GEMINI_API_KEY` from the environment or `.env`\n\
+- create a local `.env` file under the runtime home or export `GEMINI_API_KEY`\n\
+- `lilaccaps translate` loads `GEMINI_API_KEY` from the environment or `$LILACCAPS_HOME/.env`\n\
 \n\
 ## OpenClaw setup\n\
 1. Confirm `LILACCAPS_HOME` if you need a non-default runtime directory.\n\

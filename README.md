@@ -97,7 +97,8 @@ This initializes:
 - Whisper model assets under the runtime home
 - OpenClaw skill bootstrap files
 
-For translation, create a local `.env` file from `.env.example` and set:
+For translation, create a local `.env` file under the runtime home, for example
+`~/.lilac/lilaccaps/.env`, and set:
 
 ```bash
 GEMINI_API_KEY=your_api_key_here
@@ -199,8 +200,9 @@ default_targets = ["en", "ja"]
 line_order = ["source", "ja", "en"]
 ```
 
-`lilaccaps translate` loads `GEMINI_API_KEY` from the environment or a local `.env` file.
-It keeps cue timing and indexes unchanged and only rewrites cue text.
+`lilaccaps translate` loads `GEMINI_API_KEY` from the environment or from
+`$LILACCAPS_HOME/.env` (default `~/.lilac/lilaccaps/.env`). It keeps cue timing and
+indexes unchanged and only rewrites cue text.
 
 `burnin.font` defaults to `"auto"`, which lets the renderer choose a suitable font. The
 ImageMagick fallback prefers a CJK-capable font for CJK subtitles and a lighter Latin font

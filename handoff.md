@@ -100,6 +100,7 @@ The next implementation should leave the repo with:
 - Successful `transcribe` runs should stay quiet: ffmpeg audio extraction now runs with `-hide_banner -loglevel error`, and Whisper backend logs are routed through `whisper-rs` logging hooks so normal runs only print the CLI summary.
 - Burn-in style now supports CLI overrides plus TOML defaults for `font` and `size`; `font = "auto"` keeps renderer font selection, and `size = 0` keeps automatic height-based scaling.
 - Translation is a separate workflow: `translate` rewrites cue text but preserves cue timing and indexes exactly, so `burnin` can stay render-only.
-- Translation defaults now live under `[translate]` in `lilaccaps.toml`, and Gemini API credentials are loaded from `GEMINI_API_KEY` in the environment or a local `.env` file.
+- Translation defaults now live under `[translate]` in `lilaccaps.toml`, and Gemini API credentials are loaded from `GEMINI_API_KEY` in the environment or from `$LILACCAPS_HOME/.env`.
 - Multilingual captions are represented as multi-line cue text, with `translate --append` adding one translated line per target language under the original subtitle text.
 - `translate.line_order` now controls the written top-to-bottom order of multilingual cue lines, and `burnin.styles.<role>` uses those same role labels to apply per-language font and size during rendering.
+- The ImageMagick multiline fallback must create each `label:` image before applying border/stacking operations; otherwise `magick` can fail with `no images found for operation '-border'`.
