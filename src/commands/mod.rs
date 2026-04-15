@@ -3,5 +3,6 @@ pub mod doctor;
 pub mod install;
 pub mod status;
 pub mod transcribe;
+pub mod translate;
 pub mod uninstall;
 pub mod update;

@@ -97,3 +97,9 @@ The next implementation should leave the repo with:
 - Auto-language transcription now performs a dedicated detection step and then transcribes with the detected language explicitly, avoiding whisper.cpp's detect-only early return and reporting the effective language in command output.
 - Explicit `--lang` retries should not depend on language detection succeeding first; detected-language retries are optional fallback attempts, not a prerequisite for the requested language path.
 - README and generated bootstrap docs should distinguish minimum `ffmpeg` support from the recommended Homebrew `ffmpeg-full` install for native libass-based burn-in.
+- Successful `transcribe` runs should stay quiet: ffmpeg audio extraction now runs with `-hide_banner -loglevel error`, and Whisper backend logs are routed through `whisper-rs` logging hooks so normal runs only print the CLI summary.
+- Burn-in style now supports CLI overrides plus TOML defaults for `font` and `size`; `font = "auto"` keeps renderer font selection, and `size = 0` keeps automatic height-based scaling.
+- Translation is a separate workflow: `translate` rewrites cue text but preserves cue timing and indexes exactly, so `burnin` can stay render-only.
+- Translation defaults now live under `[translate]` in `lilaccaps.toml`, and Gemini API credentials are loaded from `GEMINI_API_KEY` in the environment or a local `.env` file.
+- Multilingual captions are represented as multi-line cue text, with `translate --append` adding one translated line per target language under the original subtitle text.
+- `translate.line_order` now controls the written top-to-bottom order of multilingual cue lines, and `burnin.styles.<role>` uses those same role labels to apply per-language font and size during rendering.

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -31,6 +32,10 @@ pub struct Config {
     pub agent: AgentConfig,
     pub release: ReleaseConfig,
     pub transcribe: TranscribeConfig,
+    #[serde(default)]
+    pub burnin: BurninConfig,
+    #[serde(default)]
+    pub translate: TranslateConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,6 +64,34 @@ pub struct TranscribeConfig {
 pub struct ModelConfig {
     pub id: String,
     pub path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BurninConfig {
+    #[serde(default = "default_burnin_font")]
+    pub font: String,
+    #[serde(default = "default_burnin_size")]
+    pub size: u32,
+    #[serde(default)]
+    pub styles: HashMap<String, BurninLineStyleConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TranslateConfig {
+    #[serde(default = "default_translate_model")]
+    pub model: String,
+    #[serde(default = "default_translate_append")]
+    pub append: bool,
+    #[serde(default)]
+    pub default_targets: Vec<String>,
+    #[serde(default)]
+    pub line_order: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct BurninLineStyleConfig {
+    pub font: Option<String>,
+    pub size: Option<u32>,
 }
 
 pub fn load_or_init_config(override_path: Option<PathBuf>) -> Result<LoadedConfig> {
@@ -136,6 +169,12 @@ pub fn default_config() -> Result<Config> {
                 path: None,
             },
         },
+        burnin: BurninConfig {
+            font: default_burnin_font(),
+            size: default_burnin_size(),
+            styles: HashMap::new(),
+        },
+        translate: TranslateConfig::default(),
     })
 }
 
@@ -145,6 +184,43 @@ pub fn default_runtime_home() -> Result<PathBuf> {
 
 pub fn default_transcribe_language() -> String {
     "auto".to_string()
+}
+
+pub fn default_burnin_font() -> String {
+    "auto".to_string()
+}
+
+pub fn default_burnin_size() -> u32 {
+    0
+}
+
+pub fn default_translate_model() -> String {
+    "gemini-3.1-flash-lite-preview".to_string()
+}
+
+pub fn default_translate_append() -> bool {
+    true
+}
+
+impl Default for BurninConfig {
+    fn default() -> Self {
+        Self {
+            font: default_burnin_font(),
+            size: default_burnin_size(),
+            styles: HashMap::new(),
+        }
+    }
+}
+
+impl Default for TranslateConfig {
+    fn default() -> Self {
+        Self {
+            model: default_translate_model(),
+            append: default_translate_append(),
+            default_targets: Vec::new(),
+            line_order: Vec::new(),
+        }
+    }
 }
 
 pub fn default_config_path() -> Result<PathBuf> {
@@ -199,6 +275,13 @@ mod tests {
     fn default_config_uses_auto_language_detection() {
         let config = default_config().expect("default config should build");
         assert_eq!(config.transcribe.language, "auto");
+        assert_eq!(config.burnin.font, "auto");
+        assert_eq!(config.burnin.size, 0);
+        assert!(config.burnin.styles.is_empty());
+        assert_eq!(config.translate.model, "gemini-3.1-flash-lite-preview");
+        assert!(config.translate.append);
+        assert!(config.translate.default_targets.is_empty());
+        assert!(config.translate.line_order.is_empty());
     }
 
     #[test]
@@ -213,11 +296,29 @@ skill_path = "/tmp/SKILL.md"
 [release]
 github_repo = "zhuisDEV/lilaccaps"
 
+[burnin]
+font = "auto"
+size = 0
+styles = {}
+
+[translate]
+model = "gemini-3.1-flash-lite-preview"
+append = true
+default_targets = []
+line_order = []
+
 [transcribe.model]
 id = "base"
 "#;
 
         let config: Config = toml::from_str(raw).expect("older config should parse");
         assert_eq!(config.transcribe.language, "auto");
+        assert_eq!(config.burnin.font, "auto");
+        assert_eq!(config.burnin.size, 0);
+        assert!(config.burnin.styles.is_empty());
+        assert_eq!(config.translate.model, "gemini-3.1-flash-lite-preview");
+        assert!(config.translate.append);
+        assert!(config.translate.default_targets.is_empty());
+        assert!(config.translate.line_order.is_empty());
     }
 }

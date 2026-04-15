@@ -24,6 +24,7 @@ enum Command {
     Status(StatusArgs),
     Uninstall(UninstallArgs),
     Transcribe(TranscribeArgs),
+    Translate(TranslateArgs),
     Burnin(BurninArgs),
 }
 
@@ -85,6 +86,23 @@ pub struct BurninArgs {
     pub subs: PathBuf,
     #[arg(long)]
     pub output: Option<PathBuf>,
+    #[arg(long)]
+    pub font: Option<String>,
+    #[arg(long)]
+    pub size: Option<u32>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct TranslateArgs {
+    pub input: PathBuf,
+    #[arg(long)]
+    pub config_path: Option<PathBuf>,
+    #[arg(long)]
+    pub output: Option<PathBuf>,
+    #[arg(long = "to")]
+    pub to: Vec<String>,
+    #[arg(long)]
+    pub append: Option<bool>,
 }
 
 pub fn run() -> Result<()> {
@@ -97,6 +115,7 @@ pub fn run() -> Result<()> {
         Command::Status(args) => commands::status::run(args),
         Command::Uninstall(args) => commands::uninstall::run(args),
         Command::Transcribe(args) => commands::transcribe::run(args),
+        Command::Translate(args) => commands::translate::run(args),
         Command::Burnin(args) => commands::burnin::run(args),
     }
 }

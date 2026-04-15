@@ -14,7 +14,10 @@ pub fn ensure_ffmpeg_available() -> Result<()> {
 pub fn extract_audio_to_wav(input: &Path, output: &Path) -> Result<()> {
     ensure_ffmpeg_available()?;
 
-    let status = Command::new("ffmpeg")
+    let output_result = Command::new("ffmpeg")
+        .arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
         .arg("-y")
         .arg("-i")
         .arg(input)
@@ -26,7 +29,7 @@ pub fn extract_audio_to_wav(input: &Path, output: &Path) -> Result<()> {
         .arg("-c:a")
         .arg("pcm_s16le")
         .arg(output)
-        .status()
+        .output()
         .with_context(|| {
             format!(
                 "failed to start ffmpeg audio extraction for {}",
@@ -34,26 +37,63 @@ pub fn extract_audio_to_wav(input: &Path, output: &Path) -> Result<()> {
             )
         })?;
 
-    if !status.success() {
+    if !output_result.status.success() {
+        let stderr = String::from_utf8_lossy(&output_result.stderr)
+            .trim()
+            .to_string();
+        if stderr.is_empty() {
+            bail!(
+                "ffmpeg failed while extracting mono wav audio from {}",
+                input.display()
+            );
+        }
         bail!(
-            "ffmpeg failed while extracting mono wav audio from {}",
-            input.display()
+            "ffmpeg failed while extracting mono wav audio from {}: {}",
+            input.display(),
+            stderr
         );
     }
 
     Ok(())
 }
 
-pub fn subtitles_filter(path: &Path) -> String {
+pub fn subtitles_filter(path: &Path, font: Option<&str>, size: Option<u32>) -> String {
+    let mut filter = format!("subtitles=filename='{}'", escape_subtitles_path(path));
+    let mut style = Vec::new();
+
+    if let Some(font) = font {
+        style.push(format!("FontName={}", escape_force_style_value(font)));
+    }
+
+    if let Some(size) = size {
+        style.push(format!("FontSize={size}"));
+    }
+
+    if !style.is_empty() {
+        filter.push_str(":force_style='");
+        filter.push_str(&style.join(","));
+        filter.push('\'');
+    }
+
+    filter
+}
+
+fn escape_subtitles_path(path: &Path) -> String {
     let normalized = path.to_string_lossy().replace('\\', "/");
-    let escaped = normalized
+    normalized
         .replace('\\', "\\\\")
         .replace(':', "\\:")
         .replace('\'', "\\'")
         .replace(',', "\\,")
         .replace('[', "\\[")
-        .replace(']', "\\]");
-    format!("subtitles=filename='{escaped}'")
+        .replace(']', "\\]")
+}
+
+fn escape_force_style_value(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\'', "\\'")
+        .replace(',', "\\,")
 }
 
 pub fn ffmpeg_supports_filter(name: &str) -> Result<bool> {
@@ -107,10 +147,18 @@ mod tests {
 
     #[test]
     fn escapes_subtitles_filter_path() {
-        let filter = subtitles_filter(Path::new("/tmp/a:b'[c].srt"));
+        let filter = subtitles_filter(Path::new("/tmp/a:b'[c].srt"), None, None);
         assert!(filter.contains("\\:"));
         assert!(filter.contains("\\'"));
         assert!(filter.contains("\\["));
         assert!(filter.contains("\\]"));
+    }
+
+    #[test]
+    fn includes_force_style_when_font_or_size_is_set() {
+        let filter = subtitles_filter(Path::new("/tmp/input.srt"), Some("PingFang SC"), Some(42));
+        assert!(filter.contains("force_style"));
+        assert!(filter.contains("FontName=PingFang SC"));
+        assert!(filter.contains("FontSize=42"));
     }
 }

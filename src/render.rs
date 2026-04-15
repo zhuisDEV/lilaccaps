@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -18,24 +19,57 @@ const LATIN_FONT_CANDIDATES: [&str; 2] = [
     "/System/Library/Fonts/HelveticaNeue.ttc",
 ];
 
+#[derive(Debug, Clone)]
+pub struct BurninStyle {
+    pub font: Option<String>,
+    pub size: Option<u32>,
+    pub line_order: Vec<String>,
+    pub line_styles: HashMap<String, LineStyle>,
+}
+
+impl BurninStyle {
+    pub fn font_label(&self) -> String {
+        self.font.clone().unwrap_or_else(|| "auto".to_string())
+    }
+
+    fn has_line_overrides(&self) -> bool {
+        !self.line_order.is_empty() && !self.line_styles.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct LineStyle {
+    pub font: Option<String>,
+    pub size: Option<u32>,
+}
+
 pub fn burn_in_subtitles(
     runtime_home: &Path,
     video: &Path,
     subs: &Path,
     output: &Path,
+    style: &BurninStyle,
 ) -> Result<()> {
     ensure_ffmpeg_available()?;
 
-    if ffmpeg_supports_filter("subtitles")? {
-        return burn_in_with_subtitles_filter(video, subs, output);
+    if !style.has_line_overrides() && ffmpeg_supports_filter("subtitles")? {
+        return burn_in_with_subtitles_filter(video, subs, output, style);
     }
 
-    burn_in_with_overlay_fallback(runtime_home, video, subs, output)
+    burn_in_with_overlay_fallback(runtime_home, video, subs, output, style)
 }
 
-fn burn_in_with_subtitles_filter(video: &Path, subs: &Path, output: &Path) -> Result<()> {
-    let filter = subtitles_filter(subs);
+fn burn_in_with_subtitles_filter(
+    video: &Path,
+    subs: &Path,
+    output: &Path,
+    style: &BurninStyle,
+) -> Result<()> {
+    let filter = subtitles_filter(subs, style.font.as_deref(), style.size);
     let status = Command::new("ffmpeg")
+        .arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
         .arg("-y")
         .arg("-i")
         .arg(video)
@@ -70,6 +104,7 @@ fn burn_in_with_overlay_fallback(
     video: &Path,
     subs: &Path,
     output: &Path,
+    style: &BurninStyle,
 ) -> Result<()> {
     ensure_dependency(MAGICK_DEPENDENCY)?;
 
@@ -82,7 +117,7 @@ fn burn_in_with_overlay_fallback(
     let work_dir = tmp_dir(runtime_home).join("burnin-overlays");
     ensure_dir(&work_dir)?;
 
-    let overlays = render_overlay_images(&work_dir, width, height, &cues)?;
+    let overlays = render_overlay_images(&work_dir, width, height, &cues, style)?;
     burn_in_with_overlay_images(video, &overlays, output)
 }
 
@@ -91,40 +126,14 @@ fn render_overlay_images(
     width: u32,
     height: u32,
     cues: &[SubtitleCue],
+    style: &BurninStyle,
 ) -> Result<Vec<(SubtitleCue, PathBuf)>> {
     let mut overlays = Vec::with_capacity(cues.len());
 
     for cue in cues {
-        let font_path = select_overlay_font(&cue.text);
         let image_path = work_dir.join(format!("cue-{:04}.png", cue.index));
         let image_target = format!("PNG32:{}", image_path.display());
-        let label = format!("label:{}", cue.text);
-        let status = Command::new("magick")
-            .arg("-background")
-            .arg("none")
-            .arg("-font")
-            .arg(font_path)
-            .arg("-fill")
-            .arg("white")
-            .arg("-stroke")
-            .arg("black")
-            .arg("-strokewidth")
-            .arg("2")
-            .arg("-pointsize")
-            .arg(point_size_for_height(height).to_string())
-            .arg(&label)
-            .arg("-gravity")
-            .arg("south")
-            .arg("-background")
-            .arg("none")
-            .arg("-extent")
-            .arg(format!("{width}x{height}"))
-            .arg("-gravity")
-            .arg("south")
-            .arg("-splice")
-            .arg("0x40")
-            .arg(&image_target)
-            .status()
+        let status = render_overlay_image(width, height, cue, style, &image_target)
             .with_context(|| format!("failed to start ImageMagick for cue {}", cue.index))?;
 
         if !status.success() {
@@ -140,6 +149,90 @@ fn render_overlay_images(
     Ok(overlays)
 }
 
+fn render_overlay_image(
+    width: u32,
+    height: u32,
+    cue: &SubtitleCue,
+    style: &BurninStyle,
+    image_target: &str,
+) -> Result<std::process::ExitStatus> {
+    let lines = cue.text.lines().collect::<Vec<_>>();
+    let mut command = Command::new("magick");
+    let default_point_size = style.size.unwrap_or_else(|| point_size_for_height(height));
+
+    if style.has_line_overrides() && lines.len() > 1 {
+        for (index, line) in lines.iter().enumerate() {
+            let line_style = line_style_for_index(style, index, line);
+            let font_path = line_style
+                .font
+                .as_deref()
+                .or(style.font.as_deref())
+                .unwrap_or_else(|| select_overlay_font(line));
+            let point_size = line_style.size.or(style.size).unwrap_or(default_point_size);
+            command
+                .arg("(")
+                .arg("-background")
+                .arg("none")
+                .arg("-font")
+                .arg(font_path)
+                .arg("-fill")
+                .arg("white")
+                .arg("-stroke")
+                .arg("black")
+                .arg("-strokewidth")
+                .arg("2")
+                .arg("-pointsize")
+                .arg(point_size.to_string())
+                .arg("-bordercolor")
+                .arg("none")
+                .arg("-border")
+                .arg("0x4")
+                .arg(format!("label:{line}"))
+                .arg(")");
+        }
+
+        command
+            .arg("-background")
+            .arg("none")
+            .arg("-gravity")
+            .arg("center")
+            .arg("-append");
+    } else {
+        let font_path = style
+            .font
+            .as_deref()
+            .unwrap_or_else(|| select_overlay_font(&cue.text));
+        command
+            .arg("-background")
+            .arg("none")
+            .arg("-font")
+            .arg(font_path)
+            .arg("-fill")
+            .arg("white")
+            .arg("-stroke")
+            .arg("black")
+            .arg("-strokewidth")
+            .arg("2")
+            .arg("-pointsize")
+            .arg(default_point_size.to_string())
+            .arg(format!("label:{}", cue.text));
+    }
+
+    Ok(command
+        .arg("-gravity")
+        .arg("south")
+        .arg("-background")
+        .arg("none")
+        .arg("-extent")
+        .arg(format!("{width}x{height}"))
+        .arg("-gravity")
+        .arg("south")
+        .arg("-splice")
+        .arg("0x40")
+        .arg(image_target)
+        .status()?)
+}
+
 fn burn_in_with_overlay_images(
     video: &Path,
     overlays: &[(SubtitleCue, PathBuf)],
@@ -150,7 +243,13 @@ fn burn_in_with_overlay_images(
     }
 
     let mut command = Command::new("ffmpeg");
-    command.arg("-y").arg("-i").arg(video);
+    command
+        .arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-y")
+        .arg("-i")
+        .arg(video);
 
     for (_, image_path) in overlays {
         command.arg("-i").arg(image_path);
@@ -207,6 +306,19 @@ fn point_size_for_height(height: u32) -> u32 {
     candidate.max(28)
 }
 
+fn line_style_for_index<'a>(style: &'a BurninStyle, index: usize, line: &str) -> LineStyle {
+    let role = style
+        .line_order
+        .get(index)
+        .map(String::as_str)
+        .unwrap_or("");
+    let mut resolved = style.line_styles.get(role).cloned().unwrap_or_default();
+    if resolved.font.is_none() {
+        resolved.font = Some(select_overlay_font(line).to_string());
+    }
+    resolved
+}
+
 fn select_overlay_font(text: &str) -> &'static str {
     let candidates = if text.chars().any(is_cjk_or_korean_or_japanese) {
         &CJK_FONT_CANDIDATES[..]
@@ -237,7 +349,11 @@ fn is_cjk_or_korean_or_japanese(ch: char) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_cjk_or_korean_or_japanese, select_overlay_font};
+    use super::{
+        BurninStyle, LineStyle, is_cjk_or_korean_or_japanese, line_style_for_index,
+        select_overlay_font,
+    };
+    use std::collections::HashMap;
 
     #[test]
     fn detects_cjk_script() {
@@ -251,5 +367,27 @@ mod tests {
     fn prefers_cjk_font_for_cjk_text() {
         let font = select_overlay_font("不好了麻醉剂用完了");
         assert!(!font.contains("Helvetica"));
+    }
+
+    #[test]
+    fn resolves_line_style_by_ordered_role() {
+        let mut line_styles = HashMap::new();
+        line_styles.insert(
+            "en".to_string(),
+            LineStyle {
+                font: Some("Arial".to_string()),
+                size: Some(30),
+            },
+        );
+        let style = BurninStyle {
+            font: None,
+            size: None,
+            line_order: vec!["source".to_string(), "en".to_string()],
+            line_styles,
+        };
+
+        let line_style = line_style_for_index(&style, 1, "English");
+        assert_eq!(line_style.font.as_deref(), Some("Arial"));
+        assert_eq!(line_style.size, Some(30));
     }
 }

@@ -1,10 +1,11 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Once;
 
 use anyhow::{Context, Result, bail};
 use whisper_rs::{
     FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, get_lang_id,
-    get_lang_str,
+    get_lang_str, install_logging_hooks,
 };
 
 use crate::config::load_or_init_config;
@@ -12,6 +13,8 @@ use crate::media::{ensure_ffmpeg_available, extract_audio_to_wav};
 use crate::model::ensure_model_downloaded;
 use crate::runtime::{ensure_dir, tmp_dir};
 use crate::subtitles::{SubtitleCue, write_srt_file};
+
+static WHISPER_LOGGING_HOOKS: Once = Once::new();
 
 #[derive(Debug, Clone)]
 pub struct TranscribeOutput {
@@ -96,6 +99,7 @@ pub fn run(
     }
 
     ensure_ffmpeg_available()?;
+    WHISPER_LOGGING_HOOKS.call_once(install_logging_hooks);
     let loaded = load_or_init_config(config_path)?;
     ensure_dir(&loaded.paths.runtime_home)?;
     ensure_dir(&tmp_dir(&loaded.paths.runtime_home))?;

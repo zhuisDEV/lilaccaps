@@ -9,6 +9,7 @@ mod release;
 mod render;
 mod runtime;
 mod subtitles;
+mod translate;
 
 use anyhow::Result;
 

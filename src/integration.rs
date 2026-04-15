@@ -70,6 +70,10 @@ pub fn write_bootstrap_markdown(paths: &ConfigPaths, config: &Config) -> Result<
 - Whisper model is managed under `{}/models`\n\
 - temporary working files are stored under `{}/tmp`\n\
 - config is stored in `lilaccaps.toml`\n\n\
+## API credentials\n\
+- create a local `.env` file or export `GEMINI_API_KEY`\n\
+- `lilaccaps translate` loads `GEMINI_API_KEY` from the environment or `.env`\n\
+\n\
 ## OpenClaw setup\n\
 1. Confirm `LILACCAPS_HOME` if you need a non-default runtime directory.\n\
 2. Place or link the lilaccaps skill at the configured skill path, or let `lilaccaps install` generate it.\n\
@@ -79,6 +83,20 @@ pub fn write_bootstrap_markdown(paths: &ConfigPaths, config: &Config) -> Result<
 - `transcribe.language = \"auto\"` triggers a dedicated language-detection pass and then transcribes with the detected language explicitly\n\
 - `lilaccaps transcribe --lang <code>` forces a language for that run\n\
 - if a forced language yields no subtitle text, `lilaccaps` retries greedy decoding and can fall back to the detected language when it differs\n\n\
+## Burn-in style behavior\n\
+- `burnin.font = \"auto\"` lets the renderer choose a suitable font, or you can force one with `lilaccaps burnin --font <name>`\n\
+- `burnin.size = 0` means auto-size from video height, or you can force a point size with `lilaccaps burnin --size <points>`\n\
+\n\
+## Translation behavior\n\
+- `lilaccaps translate --to en --to ja --append` appends one translated line per target language under the original cue text\n\
+- `translate.default_targets` can define default `--to` languages in `lilaccaps.toml`\n\
+- `translate.line_order` controls top-to-bottom language order inside each multilingual cue, for example `source`, `ja`, then `en`\n\
+- cue timing and indexes stay unchanged during translation\n\
+\n\
+## Per-language burn-in styling\n\
+- `burnin.styles.<role>.font` and `burnin.styles.<role>.size` can style individual lines such as `source`, `en`, or `ja`\n\
+- burn-in maps cue lines to these roles using `translate.line_order`\n\
+\n\
 ## Expected healthy status\n\
 - installed = true\n\
 - cargo_available = true\n\
@@ -119,7 +137,7 @@ pub fn ensure_skill_file(config: &Config) -> Result<PathBuf> {
     }
 
     let content = format!(
-        "{GENERATED_SKILL_MARKER}\n# lilaccaps\n\nUse the `lilaccaps` CLI for transcription and subtitle rendering.\n\n## Commands\n- `lilaccaps doctor`\n- `lilaccaps status`\n- `lilaccaps transcribe <input>`\n- `lilaccaps transcribe <input> --lang <code>`\n- `lilaccaps burnin <video> --subs <subtitle-file>`\n\n## Notes\n- `burnin` is render-only.\n- transcription is a separate workflow.\n- `transcribe.language = \"auto\"` detects a language first and then transcribes with that detected language explicitly.\n- runtime home is configured via `lilaccaps.toml` and `LILACCAPS_HOME`.\n"
+        "{GENERATED_SKILL_MARKER}\n# lilaccaps\n\nUse the `lilaccaps` CLI for transcription and subtitle rendering.\n\n## Commands\n- `lilaccaps doctor`\n- `lilaccaps status`\n- `lilaccaps transcribe <input>`\n- `lilaccaps transcribe <input> --lang <code>`\n- `lilaccaps translate <input.srt> --to en --to ja --append`\n- `lilaccaps burnin <video> --subs <subtitle-file>`\n- `lilaccaps burnin <video> --subs <subtitle-file> --font \"PingFang SC\" --size 42`\n\n## Notes\n- `burnin` is render-only.\n- transcription is a separate workflow.\n- `translate` can append one or more target-language lines to each cue for multilingual subtitles.\n- `transcribe.language = \"auto\"` detects a language first and then transcribes with that detected language explicitly.\n- `burnin.font = \"auto\"` lets the renderer choose a suitable font, while `burnin.size = 0` auto-scales captions from video height.\n- runtime home is configured via `lilaccaps.toml` and `LILACCAPS_HOME`.\n"
     );
 
     fs::write(skill_path, content)

@@ -7,31 +7,34 @@
 `lilaccaps` is a clean Rust CLI for two separate workflows:
 
 1. transcribe local video or audio into subtitle files
-2. burn an existing subtitle file into a video
+2. translate an existing subtitle file into one or more target languages
+3. burn an existing subtitle file into a video
 
 The command model stays explicit:
 
 - `lilaccaps doctor` inspects local prerequisites and setup health
 - `lilaccaps doctor --fix` installs missing macOS packages through Homebrew when possible
 - `lilaccaps transcribe` generates subtitle artifacts such as `.srt`
+- `lilaccaps translate` adds one or more translated lines to subtitle cues
 - `lilaccaps burnin` is render-only and never hides transcription inside the command
 
 ## Project Cards
 
-| Transcribe | Burn-in | Lifecycle |
-| --- | --- | --- |
+| Transcribe | Translate | Burn-in | Lifecycle |
+| --- | --- | --- | --- |
 | Extract audio with `ffmpeg`, transcribe with Whisper, write `.srt` | Render an existing subtitle file into video | Install, status, update, and uninstall support |
-| Primary flow stays subtitle-first | Primary renderer uses `ffmpeg` subtitle filters when available | Configured with `lilaccaps.toml` and `LILACCAPS_HOME` |
-| Output path is explicit | Fallback renderer uses ImageMagick overlays when needed | OpenClaw skill bootstrap is supported |
+| Primary flow stays subtitle-first | Append multilingual lines to existing cues via Gemini | Primary renderer uses `ffmpeg` subtitle filters when available | Configured with `lilaccaps.toml` and `LILACCAPS_HOME` |
+| Output path is explicit | Cue timing and indexes stay unchanged | Fallback renderer uses ImageMagick overlays when needed | OpenClaw skill bootstrap is supported |
 
 ## Features
 
 - Unified CLI under `lilaccaps`
-- `transcribe` and `burnin` kept as separate first-class workflows
+- `transcribe`, `translate`, and `burnin` kept as separate first-class workflows
 - Managed Whisper model download under the runtime home
 - Runtime health checks through `lilaccaps status`
 - Generated OpenClaw skill bootstrap
 - Clean primary and fallback separation for rendering
+- `.env` support for translation API credentials
 
 ## Requirements
 
@@ -94,6 +97,12 @@ This initializes:
 - Whisper model assets under the runtime home
 - OpenClaw skill bootstrap files
 
+For translation, create a local `.env` file from `.env.example` and set:
+
+```bash
+GEMINI_API_KEY=your_api_key_here
+```
+
 ## Usage
 
 Transcribe into subtitles:
@@ -103,10 +112,26 @@ lilaccaps transcribe ./input.mp4
 lilaccaps transcribe ./input.mp4 --lang zh
 ```
 
+Translate an existing `.srt` into one or more target languages:
+
+```bash
+lilaccaps translate ./input.srt --to en --append
+lilaccaps translate ./input.srt --to en --to ja --append
+```
+
+That produces multilingual cue text such as:
+
+```text
+原文中文
+English translation
+日本語訳
+```
+
 Burn in an existing subtitle file:
 
 ```bash
 lilaccaps burnin ./input.mp4 --subs ./input.srt
+lilaccaps burnin ./input.mp4 --subs ./input.srt --font "PingFang SC" --size 42
 ```
 
 Check environment health:
@@ -128,6 +153,11 @@ Important values:
 - `transcribe.language`
 - `transcribe.model.id`
 - `transcribe.model.path`
+- `translate.model`
+- `translate.append`
+- `translate.default_targets`
+- `burnin.font`
+- `burnin.size`
 
 `LILACCAPS_HOME` overrides the runtime home at runtime.
 
@@ -153,6 +183,64 @@ segment diagnostics.
 Supported `transcribe.model.id` values currently include `tiny`, `base`, `small`, `medium`
 and their `.en` variants. For Chinese, Japanese, and other non-English speech, use the
 non-`.en` models.
+
+`translate.model` defaults to `"gemini-3.1-flash-lite-preview"`. `translate.append`
+defaults to `true`, which means translated lines are appended below the original cue text.
+`translate.default_targets` can provide default `--to` languages for `lilaccaps translate`.
+`translate.line_order` controls top-to-bottom line order inside each multilingual cue.
+
+Example:
+
+```toml
+[translate]
+model = "gemini-3.1-flash-lite-preview"
+append = true
+default_targets = ["en", "ja"]
+line_order = ["source", "ja", "en"]
+```
+
+`lilaccaps translate` loads `GEMINI_API_KEY` from the environment or a local `.env` file.
+It keeps cue timing and indexes unchanged and only rewrites cue text.
+
+`burnin.font` defaults to `"auto"`, which lets the renderer choose a suitable font. The
+ImageMagick fallback prefers a CJK-capable font for CJK subtitles and a lighter Latin font
+otherwise. Set `burnin.font` to a system font name such as `"PingFang SC"` or `"Arial"` to
+force a specific font for burn-in, or pass `--font` on the CLI for a single run.
+
+`burnin.size` defaults to `0`, which means auto-size from the video height. Set a positive
+number in `lilaccaps.toml` or pass `--size` on the CLI to force a point size. CLI values
+override TOML values for a single run.
+
+For per-language burn-in styling, define keyed styles under `burnin.styles` using the same
+labels that appear in `translate.line_order`, such as `source`, `en`, or `ja`.
+
+Example:
+
+```toml
+[translate]
+append = true
+default_targets = ["en", "ja"]
+line_order = ["source", "ja", "en"]
+
+[burnin]
+font = "auto"
+size = 0
+
+[burnin.styles.source]
+font = "PingFang SC"
+size = 42
+
+[burnin.styles.ja]
+font = "Hiragino Sans"
+size = 38
+
+[burnin.styles.en]
+font = "Arial"
+size = 34
+```
+
+With that config, the first line in each cue uses the `source` style, the second uses `ja`,
+and the third uses `en`.
 
 ## Repository Layout
 
