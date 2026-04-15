@@ -62,9 +62,11 @@ fn model_file_name(model_id: &str) -> Result<&'static str> {
         "tiny" => Ok("ggml-tiny.bin"),
         "base" => Ok("ggml-base.bin"),
         "small" => Ok("ggml-small.bin"),
+        "medium" => Ok("ggml-medium.bin"),
         "tiny.en" => Ok("ggml-tiny.en.bin"),
         "base.en" => Ok("ggml-base.en.bin"),
         "small.en" => Ok("ggml-small.en.bin"),
+        "medium.en" => Ok("ggml-medium.en.bin"),
         _ => bail!("unsupported whisper model id: {model_id}"),
     }
 }
@@ -78,6 +80,10 @@ mod tests {
         assert_eq!(
             model_file_name("base").expect("base model should resolve"),
             "ggml-base.bin"
+        );
+        assert_eq!(
+            model_file_name("medium").expect("medium model should resolve"),
+            "ggml-medium.bin"
         );
     }
 }

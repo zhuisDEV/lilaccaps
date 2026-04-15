@@ -128,6 +128,10 @@ Important values:
 produces no subtitle segments, `lilaccaps` retries with automatic language detection. If
 beam search still yields no subtitle text, it retries with greedy decoding before failing.
 
+Supported `transcribe.model.id` values currently include `tiny`, `base`, `small`, `medium`
+and their `.en` variants. For Chinese, Japanese, and other non-English speech, use the
+non-`.en` models.
+
 ## Repository Layout
 
 ```text
