@@ -41,10 +41,14 @@ The command model stays explicit:
 - `cmake`
 - ImageMagick `magick`
 
+For native `burnin` rendering, prefer an `ffmpeg` build that includes the `subtitles` or
+`ass` filters through `libass`. On macOS with Homebrew, `ffmpeg-full` is the reliable option.
+Without those filters, `lilaccaps` falls back to ImageMagick overlay rendering.
+
 On macOS with Homebrew:
 
 ```bash
-brew install ffmpeg cmake imagemagick
+brew install ffmpeg-full cmake imagemagick
 ```
 
 ## Install
@@ -52,13 +56,18 @@ brew install ffmpeg cmake imagemagick
 Build locally and install with cargo:
 
 ```bash
-brew install ffmpeg cmake imagemagick
+brew install ffmpeg-full cmake imagemagick
 cargo install --path .
 lilaccaps install
 ```
 
 If `cmake` is missing, `cargo install` fails while compiling `whisper-rs-sys` before the
 `lilaccaps` binary exists. Install prerequisites first, then rerun `cargo install`.
+
+`doctor --fix` installs the minimum mapped packages through Homebrew after the binary exists,
+but it does not currently upgrade a plain `ffmpeg` install to `ffmpeg-full`. If you want
+native subtitle burn-in instead of the ImageMagick fallback, install an `ffmpeg` build with
+`libass` support yourself.
 
 After the binary exists, you can inspect or repair prerequisites with:
 
@@ -124,9 +133,22 @@ Important values:
 
 `transcribe.language` defaults to `"auto"`. Set it to a Whisper language code such as
 `"en"`, `"zh"`, or `"ja"` to force transcription in a specific language. `--lang` on
-`lilaccaps transcribe` overrides the config value for a single run. If a forced language
-produces no subtitle segments, `lilaccaps` retries with automatic language detection. If
-beam search still yields no subtitle text, it retries with greedy decoding before failing.
+`lilaccaps transcribe` overrides the config value for a single run.
+
+When `language = "auto"`, `lilaccaps` now performs a dedicated Whisper language-detection pass
+first and then transcribes with the detected language explicitly. That avoids the
+`detect_language=true` detect-only path in `whisper.cpp` and reports the effective language in
+the command output.
+
+When you force a language, `lilaccaps` tries:
+
+- requested language with beam search
+- requested language with greedy decoding
+- detected language with beam search, if detection succeeds and differs
+- detected language with greedy decoding, if detection succeeds and differs
+
+If all attempts still produce no subtitle text, the terminal error includes per-attempt
+segment diagnostics.
 
 Supported `transcribe.model.id` values currently include `tiny`, `base`, `small`, `medium`
 and their `.en` variants. For Chinese, Japanese, and other non-English speech, use the

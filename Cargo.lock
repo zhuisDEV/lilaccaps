@@ -672,7 +672,7 @@ dependencies = [
 
 [[package]]
 name = "lilaccaps"
-version = "0.1.2"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "clap",

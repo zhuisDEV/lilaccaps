@@ -57,8 +57,9 @@ pub fn write_bootstrap_markdown(paths: &ConfigPaths, config: &Config) -> Result<
 - `cmake`: build `whisper-rs` and its native `whisper.cpp` dependency\n\
 - `magick`: fallback burn-in renderer when the local `ffmpeg` build does not include the `subtitles` filter\n\n\
 ## Install guidance\n\
-- macOS with Homebrew: `brew install ffmpeg cmake imagemagick`\n\
-- after the binary is installed, `lilaccaps doctor --fix` can install missing Homebrew packages automatically\n\
+- macOS with Homebrew: `brew install ffmpeg-full cmake imagemagick`\n\
+- if you keep a plain `ffmpeg` build, transcription still works and burn-in falls back to ImageMagick when the `subtitles` or `ass` filters are missing\n\
+- after the binary is installed, `lilaccaps doctor --fix` can install the minimum mapped Homebrew packages automatically\n\
 - confirm tool availability before use:\n\
   - `cargo --version`\n\
   - `ffmpeg -version`\n\
@@ -74,6 +75,10 @@ pub fn write_bootstrap_markdown(paths: &ConfigPaths, config: &Config) -> Result<
 2. Place or link the lilaccaps skill at the configured skill path, or let `lilaccaps install` generate it.\n\
 3. Run `lilaccaps install` to initialize config, runtime folders, the model, and the generated skill file.\n\
 4. Run `lilaccaps doctor` or `lilaccaps status` to verify config and integration health.\n\n\
+## Transcription language behavior\n\
+- `transcribe.language = \"auto\"` triggers a dedicated language-detection pass and then transcribes with the detected language explicitly\n\
+- `lilaccaps transcribe --lang <code>` forces a language for that run\n\
+- if a forced language yields no subtitle text, `lilaccaps` retries greedy decoding and can fall back to the detected language when it differs\n\n\
 ## Expected healthy status\n\
 - installed = true\n\
 - cargo_available = true\n\
@@ -114,7 +119,7 @@ pub fn ensure_skill_file(config: &Config) -> Result<PathBuf> {
     }
 
     let content = format!(
-        "{GENERATED_SKILL_MARKER}\n# lilaccaps\n\nUse the `lilaccaps` CLI for transcription and subtitle rendering.\n\n## Commands\n- `lilaccaps doctor`\n- `lilaccaps status`\n- `lilaccaps transcribe <input>`\n- `lilaccaps burnin <video> --subs <subtitle-file>`\n\n## Notes\n- `burnin` is render-only.\n- transcription is a separate workflow.\n- runtime home is configured via `lilaccaps.toml` and `LILACCAPS_HOME`.\n"
+        "{GENERATED_SKILL_MARKER}\n# lilaccaps\n\nUse the `lilaccaps` CLI for transcription and subtitle rendering.\n\n## Commands\n- `lilaccaps doctor`\n- `lilaccaps status`\n- `lilaccaps transcribe <input>`\n- `lilaccaps transcribe <input> --lang <code>`\n- `lilaccaps burnin <video> --subs <subtitle-file>`\n\n## Notes\n- `burnin` is render-only.\n- transcription is a separate workflow.\n- `transcribe.language = \"auto\"` detects a language first and then transcribes with that detected language explicitly.\n- runtime home is configured via `lilaccaps.toml` and `LILACCAPS_HOME`.\n"
     );
 
     fs::write(skill_path, content)

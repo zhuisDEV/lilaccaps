@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use whisper_rs::{
     FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, get_lang_id,
+    get_lang_str,
 };
 
 use crate::config::load_or_init_config;
@@ -32,6 +33,14 @@ struct AttemptDiagnostics {
     non_empty_segments: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AttemptPlan {
+    language: String,
+    fallback_language_used: bool,
+    fallback_decoding_used: bool,
+    strategy: DecodeStrategy,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DecodeStrategy {
     BeamSearch,
@@ -57,6 +66,22 @@ impl AttemptDiagnostics {
             self.non_empty_segments,
             self.segment_count.saturating_sub(self.non_empty_segments)
         )
+    }
+}
+
+impl AttemptPlan {
+    fn new(
+        language: impl Into<String>,
+        fallback_language_used: bool,
+        fallback_decoding_used: bool,
+        strategy: DecodeStrategy,
+    ) -> Self {
+        Self {
+            language: language.into(),
+            fallback_language_used,
+            fallback_decoding_used,
+            strategy,
+        }
     }
 }
 
@@ -89,15 +114,20 @@ pub fn run(
     let audio_path = temp_audio_path(&loaded.paths.runtime_home, &input);
     let language = resolve_language(lang.as_deref(), Some(&loaded.config.transcribe.language))?;
     extract_audio_to_wav(&input, &audio_path)?;
-    let (cues, fallback_language_used, fallback_decoding_used, decoding_strategy) =
-        transcribe_to_cues(&model_path, &audio_path, language.as_deref())?;
+    let (
+        cues,
+        effective_language,
+        fallback_language_used,
+        fallback_decoding_used,
+        decoding_strategy,
+    ) = transcribe_to_cues(&model_path, &audio_path, language.as_deref())?;
     write_srt_file(&output, &cues)?;
 
     Ok(TranscribeOutput {
         input,
         output,
         model_path,
-        language: language.unwrap_or_else(|| "auto".to_string()),
+        language: effective_language,
         fallback_language_used,
         fallback_decoding_used,
         decoding_strategy,
@@ -125,7 +155,7 @@ fn transcribe_to_cues(
     model_path: &Path,
     audio_path: &Path,
     language: Option<&str>,
-) -> Result<(Vec<SubtitleCue>, bool, bool, &'static str)> {
+) -> Result<(Vec<SubtitleCue>, String, bool, bool, &'static str)> {
     let samples: Vec<i16> = hound::WavReader::open(audio_path)
         .with_context(|| format!("failed to open extracted wav {}", audio_path.display()))?
         .into_samples::<i16>()
@@ -143,25 +173,27 @@ fn transcribe_to_cues(
         WhisperContextParameters::default(),
     )
     .with_context(|| format!("failed to load whisper model {}", model_path.display()))?;
-    let mut attempts = vec![
-        (language, false, DecodeStrategy::BeamSearch),
-        (language, true, DecodeStrategy::Greedy),
-    ];
-    if language.is_some() {
-        attempts.push((None, true, DecodeStrategy::BeamSearch));
-        attempts.push((None, true, DecodeStrategy::Greedy));
-    }
+    let detected_language = match language {
+        Some(_) => detect_language(&ctx, &audio).ok(),
+        None => Some(detect_language(&ctx, &audio)?),
+    };
+    let attempts = build_attempts(language, detected_language.as_deref());
 
     let mut diagnostics = Vec::new();
-    for (attempt_language, fallback_used, strategy) in attempts {
-        let (cues, attempt_diagnostics) =
-            transcribe_once(&ctx, &audio, attempt_language, strategy)?;
+    for attempt in attempts {
+        let (cues, attempt_diagnostics) = transcribe_once(
+            &ctx,
+            &audio,
+            Some(attempt.language.as_str()),
+            attempt.strategy,
+        )?;
         if !cues.is_empty() {
             return Ok((
                 cues,
-                attempt_language != language,
-                fallback_used,
-                strategy.label(),
+                attempt.language,
+                attempt.fallback_language_used,
+                attempt.fallback_decoding_used,
+                attempt.strategy.label(),
             ));
         }
         diagnostics.push(attempt_diagnostics);
@@ -175,6 +207,61 @@ fn transcribe_to_cues(
     bail!(
         "whisper returned no subtitle segments after trying beam and greedy decoding. attempt_diagnostics = {summary}"
     )
+}
+
+fn build_attempts(
+    requested_language: Option<&str>,
+    detected_language: Option<&str>,
+) -> Vec<AttemptPlan> {
+    let primary_language = requested_language
+        .or(detected_language)
+        .expect("transcription attempts require either a requested or detected language");
+    let mut attempts = vec![
+        AttemptPlan::new(primary_language, false, false, DecodeStrategy::BeamSearch),
+        AttemptPlan::new(primary_language, false, true, DecodeStrategy::Greedy),
+    ];
+
+    if let (Some(requested_language), Some(detected_language)) =
+        (requested_language, detected_language)
+    {
+        if detected_language != requested_language {
+            attempts.push(AttemptPlan::new(
+                detected_language,
+                true,
+                false,
+                DecodeStrategy::BeamSearch,
+            ));
+            attempts.push(AttemptPlan::new(
+                detected_language,
+                true,
+                true,
+                DecodeStrategy::Greedy,
+            ));
+        }
+    }
+
+    attempts
+}
+
+fn detect_language(ctx: &WhisperContext, audio: &[f32]) -> Result<String> {
+    if !ctx.is_multilingual() {
+        return Ok("en".to_string());
+    }
+
+    let threads = num_cpus::get_physical().max(1);
+    let mut state = ctx
+        .create_state()
+        .context("failed to create whisper state for language detection")?;
+    state
+        .pcm_to_mel(audio, threads)
+        .context("failed to prepare audio for whisper language detection")?;
+    let (lang_id, _) = state
+        .lang_detect(0, threads)
+        .context("failed to auto-detect whisper language")?;
+
+    get_lang_str(lang_id)
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("whisper returned unknown language id {lang_id}"))
 }
 
 fn transcribe_once(
@@ -200,7 +287,9 @@ fn transcribe_once(
     params.set_print_timestamps(false);
     params.set_translate(false);
     params.set_language(language);
-    params.set_detect_language(language.is_none());
+    // `detect_language=true` makes whisper.cpp return after detection without transcribing.
+    // For actual transcription we always pass an explicit language, including auto-detected ones.
+    params.set_detect_language(false);
     params.set_n_threads(num_cpus::get_physical() as i32);
 
     state
@@ -236,13 +325,14 @@ fn collect_cues(
         });
     }
 
+    let non_empty_segments = cues.len();
     Ok((
-        cues.clone(),
+        cues,
         AttemptDiagnostics {
             language: language.unwrap_or("auto").to_string(),
             decoding_strategy: strategy.label(),
             segment_count,
-            non_empty_segments: cues.len(),
+            non_empty_segments,
         },
     ))
 }
@@ -268,7 +358,9 @@ fn resolve_language(cli_lang: Option<&str>, config_lang: Option<&str>) -> Result
 
 #[cfg(test)]
 mod tests {
-    use super::{AttemptDiagnostics, DecodeStrategy, resolve_language};
+    use super::{
+        AttemptDiagnostics, AttemptPlan, DecodeStrategy, build_attempts, resolve_language,
+    };
 
     #[test]
     fn cli_language_overrides_config_language() {
@@ -309,5 +401,52 @@ mod tests {
         assert!(summary.contains("language=zh"));
         assert!(summary.contains("decoding=beam"));
         assert!(summary.contains("blank_segments=3"));
+    }
+
+    #[test]
+    fn attempt_plan_marks_decoding_fallback_only_for_greedy() {
+        let beam = AttemptPlan::new("zh", false, false, DecodeStrategy::BeamSearch);
+        let greedy = AttemptPlan::new("zh", false, true, DecodeStrategy::Greedy);
+
+        assert!(!beam.fallback_decoding_used);
+        assert!(greedy.fallback_decoding_used);
+    }
+
+    #[test]
+    fn auto_language_attempts_use_detected_language_only() {
+        let attempts = build_attempts(None, Some("zh"));
+
+        assert_eq!(attempts.len(), 2);
+        assert_eq!(
+            attempts[0],
+            AttemptPlan::new("zh", false, false, DecodeStrategy::BeamSearch)
+        );
+        assert_eq!(
+            attempts[1],
+            AttemptPlan::new("zh", false, true, DecodeStrategy::Greedy)
+        );
+    }
+
+    #[test]
+    fn explicit_language_attempts_include_detected_fallback_when_different() {
+        let attempts = build_attempts(Some("ja"), Some("zh"));
+
+        assert_eq!(attempts.len(), 4);
+        assert_eq!(
+            attempts[0],
+            AttemptPlan::new("ja", false, false, DecodeStrategy::BeamSearch)
+        );
+        assert_eq!(
+            attempts[1],
+            AttemptPlan::new("ja", false, true, DecodeStrategy::Greedy)
+        );
+        assert_eq!(
+            attempts[2],
+            AttemptPlan::new("zh", true, false, DecodeStrategy::BeamSearch)
+        );
+        assert_eq!(
+            attempts[3],
+            AttemptPlan::new("zh", true, true, DecodeStrategy::Greedy)
+        );
     }
 }

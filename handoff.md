@@ -87,10 +87,13 @@ The next implementation should leave the repo with:
 - The default config path now lives under the runtime home at `~/.lilac/lilaccaps/lilaccaps.toml`.
 - Transcription language now supports config default plus per-run CLI override via `--lang`; `"auto"` preserves Whisper auto-detection.
 - Config schema changes must stay backward-compatible on read; older configs missing `transcribe.language` should default to `"auto"` instead of breaking `update`.
-- Forced transcription language should fall back to automatic language detection when Whisper returns no usable segments.
+- Forced transcription language should retry with the detected language when Whisper returns no usable segments and detection identifies a different language.
 - The ImageMagick burn-in fallback must emit `PNG32:` overlays and normalize overlay inputs to `rgba`; otherwise ffmpeg can compose monochrome/transparent inputs into a black video stream.
 - For CJK subtitles in the ImageMagick fallback, prefer a CJK-capable macOS system font and render text via a `label:` image before expanding to the video canvas; the older full-canvas annotate path could silently produce transparent overlays.
 - Burn-in font choice should key off the subtitle text itself: CJK-heavy cues should prefer CJK-capable fonts, while Latin text can stay on the lighter Latin fallback.
 - Transcription should fall back across both language selection and decoding strategy: try beam search first, then greedy decoding, before treating a clip as having produced no subtitle text.
 - Whisper model resolution now supports `medium` and `medium.en` in addition to the smaller model sizes.
 - Empty-output transcription failures now include per-attempt diagnostics showing language, decode strategy, total segments, non-empty segments, and blank-segment counts.
+- Auto-language transcription now performs a dedicated detection step and then transcribes with the detected language explicitly, avoiding whisper.cpp's detect-only early return and reporting the effective language in command output.
+- Explicit `--lang` retries should not depend on language detection succeeding first; detected-language retries are optional fallback attempts, not a prerequisite for the requested language path.
+- README and generated bootstrap docs should distinguish minimum `ffmpeg` support from the recommended Homebrew `ffmpeg-full` install for native libass-based burn-in.
