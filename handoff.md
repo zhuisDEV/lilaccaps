@@ -91,3 +91,4 @@ The next implementation should leave the repo with:
 - The ImageMagick burn-in fallback must emit `PNG32:` overlays and normalize overlay inputs to `rgba`; otherwise ffmpeg can compose monochrome/transparent inputs into a black video stream.
 - For CJK subtitles in the ImageMagick fallback, prefer a CJK-capable macOS system font and render text via a `label:` image before expanding to the video canvas; the older full-canvas annotate path could silently produce transparent overlays.
 - Burn-in font choice should key off the subtitle text itself: CJK-heavy cues should prefer CJK-capable fonts, while Latin text can stay on the lighter Latin fallback.
+- Transcription should fall back across both language selection and decoding strategy: try beam search first, then greedy decoding, before treating a clip as having produced no subtitle text.

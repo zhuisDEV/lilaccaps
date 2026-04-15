@@ -19,7 +19,24 @@ pub struct TranscribeOutput {
     pub model_path: PathBuf,
     pub language: String,
     pub fallback_language_used: bool,
+    pub fallback_decoding_used: bool,
+    pub decoding_strategy: &'static str,
     pub status: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DecodeStrategy {
+    BeamSearch,
+    Greedy,
+}
+
+impl DecodeStrategy {
+    fn label(self) -> &'static str {
+        match self {
+            Self::BeamSearch => "beam",
+            Self::Greedy => "greedy",
+        }
+    }
 }
 
 pub fn run(
@@ -51,7 +68,7 @@ pub fn run(
     let audio_path = temp_audio_path(&loaded.paths.runtime_home, &input);
     let language = resolve_language(lang.as_deref(), Some(&loaded.config.transcribe.language))?;
     extract_audio_to_wav(&input, &audio_path)?;
-    let (cues, fallback_language_used) =
+    let (cues, fallback_language_used, fallback_decoding_used, decoding_strategy) =
         transcribe_to_cues(&model_path, &audio_path, language.as_deref())?;
     write_srt_file(&output, &cues)?;
 
@@ -61,6 +78,8 @@ pub fn run(
         model_path,
         language: language.unwrap_or_else(|| "auto".to_string()),
         fallback_language_used,
+        fallback_decoding_used,
+        decoding_strategy,
         status: "generated",
     })
 }
@@ -85,27 +104,7 @@ fn transcribe_to_cues(
     model_path: &Path,
     audio_path: &Path,
     language: Option<&str>,
-) -> Result<(Vec<SubtitleCue>, bool)> {
-    let cues = transcribe_once(model_path, audio_path, language)?;
-    if !cues.is_empty() {
-        return Ok((cues, false));
-    }
-
-    if language.is_some() {
-        let fallback_cues = transcribe_once(model_path, audio_path, None)?;
-        if !fallback_cues.is_empty() {
-            return Ok((fallback_cues, true));
-        }
-    }
-
-    bail!("whisper returned no subtitle segments");
-}
-
-fn transcribe_once(
-    model_path: &Path,
-    audio_path: &Path,
-    language: Option<&str>,
-) -> Result<Vec<SubtitleCue>> {
+) -> Result<(Vec<SubtitleCue>, bool, bool, &'static str)> {
     let samples: Vec<i16> = hound::WavReader::open(audio_path)
         .with_context(|| format!("failed to open extracted wav {}", audio_path.display()))?
         .into_samples::<i16>()
@@ -123,14 +122,47 @@ fn transcribe_once(
         WhisperContextParameters::default(),
     )
     .with_context(|| format!("failed to load whisper model {}", model_path.display()))?;
+    let mut attempts = vec![
+        (language, false, DecodeStrategy::BeamSearch),
+        (language, true, DecodeStrategy::Greedy),
+    ];
+    if language.is_some() {
+        attempts.push((None, true, DecodeStrategy::BeamSearch));
+        attempts.push((None, true, DecodeStrategy::Greedy));
+    }
+
+    for (attempt_language, fallback_used, strategy) in attempts {
+        let cues = transcribe_once(&ctx, &audio, attempt_language, strategy)?;
+        if !cues.is_empty() {
+            return Ok((
+                cues,
+                attempt_language != language,
+                fallback_used,
+                strategy.label(),
+            ));
+        }
+    }
+
+    bail!("whisper returned no subtitle segments after trying beam and greedy decoding")
+}
+
+fn transcribe_once(
+    ctx: &WhisperContext,
+    audio: &[f32],
+    language: Option<&str>,
+    strategy: DecodeStrategy,
+) -> Result<Vec<SubtitleCue>> {
     let mut state = ctx
         .create_state()
         .context("failed to create whisper state")?;
 
-    let mut params = FullParams::new(SamplingStrategy::BeamSearch {
-        beam_size: 5,
-        patience: -1.0,
-    });
+    let mut params = match strategy {
+        DecodeStrategy::BeamSearch => FullParams::new(SamplingStrategy::BeamSearch {
+            beam_size: 5,
+            patience: -1.0,
+        }),
+        DecodeStrategy::Greedy => FullParams::new(SamplingStrategy::Greedy { best_of: 3 }),
+    };
     params.set_print_special(false);
     params.set_print_progress(false);
     params.set_print_realtime(false);
@@ -141,9 +173,13 @@ fn transcribe_once(
     params.set_n_threads(num_cpus::get_physical() as i32);
 
     state
-        .full(params, &audio)
+        .full(params, audio)
         .context("failed to transcribe audio with whisper")?;
 
+    collect_cues(&state)
+}
+
+fn collect_cues(state: &whisper_rs::WhisperState) -> Result<Vec<SubtitleCue>> {
     let mut cues = Vec::new();
     for (index, segment) in state.as_iter().enumerate() {
         let text = segment
@@ -187,7 +223,7 @@ fn resolve_language(cli_lang: Option<&str>, config_lang: Option<&str>) -> Result
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_language;
+    use super::{DecodeStrategy, resolve_language};
 
     #[test]
     fn cli_language_overrides_config_language() {
@@ -208,5 +244,11 @@ mod tests {
             err.to_string()
                 .contains("unsupported transcription language")
         );
+    }
+
+    #[test]
+    fn decode_strategy_labels_are_stable() {
+        assert_eq!(DecodeStrategy::BeamSearch.label(), "beam");
+        assert_eq!(DecodeStrategy::Greedy.label(), "greedy");
     }
 }
