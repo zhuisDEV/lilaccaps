@@ -39,6 +39,7 @@ const HIRAGINO_SANS_FONT_CANDIDATES: [&str; 2] = [
 pub struct BurninStyle {
     pub font: Option<String>,
     pub size: Option<u32>,
+    pub line_spacing: Option<u32>,
     pub line_order: Vec<String>,
     pub line_styles: HashMap<String, LineStyle>,
 }
@@ -50,6 +51,10 @@ impl BurninStyle {
 
     fn has_line_overrides(&self) -> bool {
         !self.line_order.is_empty() && !self.line_styles.is_empty()
+    }
+
+    fn uses_overlay_renderer(&self) -> bool {
+        self.has_line_overrides() || self.line_spacing.is_some()
     }
 }
 
@@ -68,7 +73,7 @@ pub fn burn_in_subtitles(
 ) -> Result<()> {
     ensure_ffmpeg_available()?;
 
-    if !style.has_line_overrides() && ffmpeg_supports_filter("subtitles")? {
+    if !style.uses_overlay_renderer() && ffmpeg_supports_filter("subtitles")? {
         return burn_in_with_subtitles_filter(video, subs, output, style);
     }
 
@@ -186,6 +191,9 @@ fn render_overlay_image(
                 .map(|font| resolve_overlay_font(font, line))
                 .unwrap_or_else(|| select_overlay_font(line).to_string());
             let point_size = line_style.size.or(style.size).unwrap_or(default_point_size);
+            let vertical_padding = style
+                .line_spacing
+                .unwrap_or_else(|| multiline_line_padding(point_size));
             command
                 .arg("(")
                 .arg("-background")
@@ -204,7 +212,7 @@ fn render_overlay_image(
                 .arg("-bordercolor")
                 .arg("none")
                 .arg("-border")
-                .arg("0x4")
+                .arg(format!("0x{vertical_padding}"))
                 .arg(")");
         }
 
@@ -324,6 +332,10 @@ fn point_size_for_height(height: u32) -> u32 {
     candidate.max(28)
 }
 
+fn multiline_line_padding(point_size: u32) -> u32 {
+    (point_size / 24).clamp(1, 2)
+}
+
 fn line_style_for_index<'a>(style: &'a BurninStyle, index: usize, line: &str) -> LineStyle {
     let role = style
         .line_order
@@ -406,7 +418,7 @@ fn is_cjk_or_korean_or_japanese(ch: char) -> bool {
 mod tests {
     use super::{
         BurninStyle, LineStyle, is_cjk_or_korean_or_japanese, line_style_for_index,
-        named_font_candidates, select_overlay_font,
+        multiline_line_padding, named_font_candidates, select_overlay_font,
     };
     use std::collections::HashMap;
 
@@ -437,6 +449,7 @@ mod tests {
         let style = BurninStyle {
             font: None,
             size: None,
+            line_spacing: None,
             line_order: vec!["source".to_string(), "en".to_string()],
             line_styles,
         };
@@ -450,5 +463,25 @@ mod tests {
     fn maps_named_font_aliases_to_candidates() {
         assert!(!named_font_candidates("PingFang SC").is_empty());
         assert!(!named_font_candidates("Arial").is_empty());
+    }
+
+    #[test]
+    fn multiline_padding_stays_tight() {
+        assert_eq!(multiline_line_padding(30), 1);
+        assert_eq!(multiline_line_padding(42), 1);
+        assert_eq!(multiline_line_padding(60), 2);
+    }
+
+    #[test]
+    fn line_spacing_forces_overlay_renderer() {
+        let style = BurninStyle {
+            font: None,
+            size: None,
+            line_spacing: Some(3),
+            line_order: Vec::new(),
+            line_styles: HashMap::new(),
+        };
+
+        assert!(style.uses_overlay_renderer());
     }
 }

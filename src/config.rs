@@ -72,6 +72,8 @@ pub struct BurninConfig {
     pub font: String,
     #[serde(default = "default_burnin_size")]
     pub size: u32,
+    #[serde(default = "default_burnin_line_spacing")]
+    pub line_spacing: u32,
     #[serde(default)]
     pub styles: HashMap<String, BurninLineStyleConfig>,
 }
@@ -172,6 +174,7 @@ pub fn default_config() -> Result<Config> {
         burnin: BurninConfig {
             font: default_burnin_font(),
             size: default_burnin_size(),
+            line_spacing: default_burnin_line_spacing(),
             styles: HashMap::new(),
         },
         translate: TranslateConfig::default(),
@@ -194,6 +197,10 @@ pub fn default_burnin_size() -> u32 {
     0
 }
 
+pub fn default_burnin_line_spacing() -> u32 {
+    0
+}
+
 pub fn default_translate_model() -> String {
     "gemini-3.1-flash-lite-preview".to_string()
 }
@@ -207,6 +214,7 @@ impl Default for BurninConfig {
         Self {
             font: default_burnin_font(),
             size: default_burnin_size(),
+            line_spacing: default_burnin_line_spacing(),
             styles: HashMap::new(),
         }
     }
@@ -277,6 +285,7 @@ mod tests {
         assert_eq!(config.transcribe.language, "auto");
         assert_eq!(config.burnin.font, "auto");
         assert_eq!(config.burnin.size, 0);
+        assert_eq!(config.burnin.line_spacing, 0);
         assert!(config.burnin.styles.is_empty());
         assert_eq!(config.translate.model, "gemini-3.1-flash-lite-preview");
         assert!(config.translate.append);
@@ -299,6 +308,7 @@ github_repo = "zhuisDEV/lilaccaps"
 [burnin]
 font = "auto"
 size = 0
+line_spacing = 0
 styles = {}
 
 [translate]
@@ -315,6 +325,7 @@ id = "base"
         assert_eq!(config.transcribe.language, "auto");
         assert_eq!(config.burnin.font, "auto");
         assert_eq!(config.burnin.size, 0);
+        assert_eq!(config.burnin.line_spacing, 0);
         assert!(config.burnin.styles.is_empty());
         assert_eq!(config.translate.model, "gemini-3.1-flash-lite-preview");
         assert!(config.translate.append);

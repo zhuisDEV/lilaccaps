@@ -18,6 +18,7 @@ pub fn run(args: BurninArgs) -> Result<()> {
     println!("output = {}", output.output.display());
     println!("font = {}", output.font);
     println!("size = {}", output.size);
+    println!("line_spacing = {}", output.line_spacing);
     println!("status = {}", output.status);
     Ok(())
 }

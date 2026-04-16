@@ -86,6 +86,7 @@ pub fn write_bootstrap_markdown(paths: &ConfigPaths, config: &Config) -> Result<
 ## Burn-in style behavior\n\
 - `burnin.font = \"auto\"` lets the renderer choose a suitable font, or you can force one with `lilaccaps burnin --font <name>`\n\
 - `burnin.size = 0` means auto-size from video height, or you can force a point size with `lilaccaps burnin --size <points>`\n\
+- `burnin.line_spacing = 0` means auto spacing; set a positive value in `lilaccaps.toml` to control the gap between lines in multiline subtitles\n\
 \n\
 ## Translation behavior\n\
 - `lilaccaps translate --to en --to ja --append` appends one translated line per target language under the original cue text\n\

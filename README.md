@@ -159,6 +159,7 @@ Important values:
 - `translate.default_targets`
 - `burnin.font`
 - `burnin.size`
+- `burnin.line_spacing`
 
 `LILACCAPS_HOME` overrides the runtime home at runtime.
 
@@ -213,8 +214,14 @@ force a specific font for burn-in, or pass `--font` on the CLI for a single run.
 number in `lilaccaps.toml` or pass `--size` on the CLI to force a point size. CLI values
 override TOML values for a single run.
 
+`burnin.line_spacing` defaults to `0`, which means auto spacing. Set a positive number in
+`lilaccaps.toml` to control the vertical gap between lines in multiline burn-in subtitles.
+This setting is applied by the ImageMagick overlay renderer; when you set it explicitly,
+`lilaccaps` prefers that renderer so the spacing value is honored.
+
 For per-language burn-in styling, define keyed styles under `burnin.styles` using the same
-labels that appear in `translate.line_order`, such as `source`, `en`, or `ja`.
+labels that appear in `translate.line_order`, such as `source`, `en`, or `ja`. Set
+`font = "auto"` or omit `font` to keep renderer font selection per line.
 
 Example:
 
@@ -227,17 +234,18 @@ line_order = ["source", "ja", "en"]
 [burnin]
 font = "auto"
 size = 0
+line_spacing = 1
 
 [burnin.styles.source]
-font = "PingFang SC"
+font = "auto"
 size = 42
 
 [burnin.styles.ja]
-font = "Hiragino Sans"
+font = "auto"
 size = 38
 
 [burnin.styles.en]
-font = "Arial"
+font = "auto"
 size = 34
 ```
 

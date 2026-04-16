@@ -15,6 +15,7 @@ pub struct BurninOutput {
     pub output: PathBuf,
     pub font: String,
     pub size: u32,
+    pub line_spacing: u32,
     pub status: &'static str,
 }
 
@@ -38,6 +39,7 @@ pub fn run(
         &loaded.config.translate.line_order,
         &loaded.config.burnin.font,
         loaded.config.burnin.size,
+        loaded.config.burnin.line_spacing,
         &loaded.config.burnin.styles,
         font,
         size,
@@ -61,6 +63,7 @@ pub fn run(
         output,
         font: style.font_label(),
         size: style.size.unwrap_or(0),
+        line_spacing: style.line_spacing.unwrap_or(0),
         status: "rendered",
     })
 }
@@ -81,12 +84,17 @@ fn resolve_style(
     config_line_order: &[String],
     config_font: &str,
     config_size: u32,
+    config_line_spacing: u32,
     config_styles: &HashMap<String, crate::config::BurninLineStyleConfig>,
     cli_font: Option<String>,
     cli_size: Option<u32>,
 ) -> BurninStyle {
     let font = cli_font.or_else(|| normalize_font(config_font));
     let size = match cli_size.unwrap_or(config_size) {
+        0 => None,
+        value => Some(value),
+    };
+    let line_spacing = match config_line_spacing {
         0 => None,
         value => Some(value),
     };
@@ -106,6 +114,7 @@ fn resolve_style(
     BurninStyle {
         font,
         size,
+        line_spacing,
         line_order: config_line_order.to_vec(),
         line_styles,
     }
