@@ -135,6 +135,13 @@ lilaccaps burnin ./input.mp4 --subs ./input.srt
 lilaccaps burnin ./input.mp4 --subs ./input.srt --font "PingFang SC" --size 42
 ```
 
+`lilaccaps burnin` reports the actual renderer it used:
+- `renderer = ffmpeg-subtitles`
+- `renderer = overlay-fallback`
+
+When the overlay fallback is used, `renderer_reason` shows why, for example
+`per_line_styles,line_spacing,colour`.
+
 Check environment health:
 
 ```bash
@@ -161,6 +168,7 @@ Important values:
 - `burnin.colour`
 - `burnin.size`
 - `burnin.line_spacing`
+- `burnin.advanced_styling`
 
 `LILACCAPS_HOME` overrides the runtime home at runtime.
 
@@ -215,7 +223,8 @@ force a specific font for burn-in, or pass `--font` on the CLI for a single run.
 Set it to an ImageMagick colour string such as `"yellow"`, `"#ffd54f"`, or `"rgb(255,220,120)"`
 to change subtitle fill colour, or pass `--colour` on the CLI for a single run. The CLI also
 accepts `--color` as an alias. Explicit colour values are applied through the overlay renderer
-so the configured fill colour is honored consistently.
+so the configured fill colour is honored consistently. The overlay renderer preserves colour by
+rendering a fill-only text layer plus a separate black shadow layer for contrast.
 
 `burnin.size` defaults to `0`, which means auto-size from the video height. Set a positive
 number in `lilaccaps.toml` or pass `--size` on the CLI to force a point size. CLI values
@@ -225,6 +234,10 @@ override TOML values for a single run.
 `lilaccaps.toml` to control the vertical gap between lines in multiline burn-in subtitles.
 This setting is applied by the ImageMagick overlay renderer; when you set it explicitly,
 `lilaccaps` prefers that renderer so the spacing value is honored.
+
+`burnin.advanced_styling` defaults to `true`. Set it to `false` to ignore custom colour,
+custom line spacing, and all `burnin.styles.<role>` per-line styling so `lilaccaps` can stay
+on the primary `ffmpeg` subtitle path when your `ffmpeg` build supports it.
 
 For per-language burn-in styling, define keyed styles under `burnin.styles` using the same
 labels that appear in `translate.line_order`, such as `source`, `en`, or `ja`. Set
@@ -240,6 +253,9 @@ default_targets = ["en", "ja"]
 line_order = ["source", "ja", "en"]
 
 [burnin]
+# Keep this `true` for per-line styles, custom colours, and custom spacing.
+# Set it to `false` to ignore those advanced settings and prefer ffmpeg/libass.
+advanced_styling = true
 font = "auto"
 colour = "auto"
 size = 0

@@ -45,6 +45,12 @@ pub struct BurninStyle {
     pub line_styles: HashMap<String, LineStyle>,
 }
 
+#[derive(Debug, Clone)]
+pub struct BurninRendererReport {
+    pub renderer: &'static str,
+    pub reasons: Vec<&'static str>,
+}
+
 impl BurninStyle {
     pub fn font_label(&self) -> String {
         self.font.clone().unwrap_or_else(|| "auto".to_string())
@@ -76,14 +82,27 @@ pub fn burn_in_subtitles(
     subs: &Path,
     output: &Path,
     style: &BurninStyle,
-) -> Result<()> {
+) -> Result<BurninRendererReport> {
     ensure_ffmpeg_available()?;
 
     if !style.uses_overlay_renderer() && ffmpeg_supports_filter("subtitles")? {
-        return burn_in_with_subtitles_filter(video, subs, output, style);
+        burn_in_with_subtitles_filter(video, subs, output, style)?;
+        return Ok(BurninRendererReport {
+            renderer: "ffmpeg-subtitles",
+            reasons: Vec::new(),
+        });
     }
 
-    burn_in_with_overlay_fallback(runtime_home, video, subs, output, style)
+    let reasons = overlay_renderer_reasons(style);
+    burn_in_with_overlay_fallback(runtime_home, video, subs, output, style)?;
+    Ok(BurninRendererReport {
+        renderer: "overlay-fallback",
+        reasons: if reasons.is_empty() {
+            vec!["ffmpeg_subtitles_filter_unavailable"]
+        } else {
+            reasons
+        },
+    })
 }
 
 fn burn_in_with_subtitles_filter(
@@ -207,19 +226,30 @@ fn render_overlay_image(
                 .unwrap_or_else(|| multiline_line_padding(point_size));
             command
                 .arg("(")
+                .arg("(")
                 .arg("-background")
                 .arg("none")
                 .arg("-font")
                 .arg(&font_path)
                 .arg("-fill")
                 .arg(fill_colour)
-                .arg("-stroke")
-                .arg("black")
-                .arg("-strokewidth")
-                .arg("2")
                 .arg("-pointsize")
                 .arg(point_size.to_string())
                 .arg(format!("label:{line}"))
+                .arg(")")
+                .arg("(")
+                .arg("+clone")
+                .arg("-background")
+                .arg("black")
+                .arg("-shadow")
+                .arg("100x1+0+0")
+                .arg(")")
+                .arg("+swap")
+                .arg("-background")
+                .arg("none")
+                .arg("-layers")
+                .arg("merge")
+                .arg("+repage")
                 .arg("-bordercolor")
                 .arg("none")
                 .arg("-border")
@@ -241,19 +271,30 @@ fn render_overlay_image(
             .unwrap_or_else(|| select_overlay_font(&cue.text).to_string());
         let fill_colour = style.colour.as_deref().unwrap_or("white");
         command
+            .arg("(")
             .arg("-background")
             .arg("none")
             .arg("-font")
             .arg(&font_path)
             .arg("-fill")
             .arg(fill_colour)
-            .arg("-stroke")
-            .arg("black")
-            .arg("-strokewidth")
-            .arg("2")
             .arg("-pointsize")
             .arg(default_point_size.to_string())
-            .arg(format!("label:{}", cue.text));
+            .arg(format!("label:{}", cue.text))
+            .arg(")")
+            .arg("(")
+            .arg("+clone")
+            .arg("-background")
+            .arg("black")
+            .arg("-shadow")
+            .arg("100x1+0+0")
+            .arg(")")
+            .arg("+swap")
+            .arg("-background")
+            .arg("none")
+            .arg("-layers")
+            .arg("merge")
+            .arg("+repage");
     }
 
     Ok(command
@@ -348,6 +389,24 @@ fn multiline_line_padding(point_size: u32) -> u32 {
     (point_size / 24).clamp(1, 2)
 }
 
+fn overlay_renderer_reasons(style: &BurninStyle) -> Vec<&'static str> {
+    let mut reasons = Vec::new();
+
+    if style.has_line_overrides() {
+        reasons.push("per_line_styles");
+    }
+
+    if style.line_spacing.is_some() {
+        reasons.push("line_spacing");
+    }
+
+    if style.colour.is_some() {
+        reasons.push("colour");
+    }
+
+    reasons
+}
+
 fn line_style_for_index<'a>(style: &'a BurninStyle, index: usize, line: &str) -> LineStyle {
     let role = style
         .line_order
@@ -430,7 +489,8 @@ fn is_cjk_or_korean_or_japanese(ch: char) -> bool {
 mod tests {
     use super::{
         BurninStyle, LineStyle, is_cjk_or_korean_or_japanese, line_style_for_index,
-        multiline_line_padding, named_font_candidates, select_overlay_font,
+        multiline_line_padding, named_font_candidates, overlay_renderer_reasons,
+        select_overlay_font,
     };
     use std::collections::HashMap;
 
@@ -512,5 +572,20 @@ mod tests {
         };
 
         assert!(style.uses_overlay_renderer());
+    }
+
+    #[test]
+    fn overlay_renderer_reasons_report_active_features() {
+        let style = BurninStyle {
+            font: None,
+            colour: Some("#ffd54f".to_string()),
+            size: None,
+            line_spacing: Some(1),
+            line_order: vec!["source".to_string()],
+            line_styles: HashMap::from([("source".to_string(), LineStyle::default())]),
+        };
+
+        let reasons = overlay_renderer_reasons(&style);
+        assert_eq!(reasons, vec!["per_line_styles", "line_spacing", "colour"]);
     }
 }

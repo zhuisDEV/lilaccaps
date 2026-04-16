@@ -21,6 +21,8 @@ pub fn run(args: BurninArgs) -> Result<()> {
     println!("colour = {}", output.colour);
     println!("size = {}", output.size);
     println!("line_spacing = {}", output.line_spacing);
+    println!("renderer = {}", output.renderer);
+    println!("renderer_reason = {}", output.renderer_reason);
     println!("status = {}", output.status);
     Ok(())
 }
