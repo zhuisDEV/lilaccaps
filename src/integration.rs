@@ -85,6 +85,7 @@ pub fn write_bootstrap_markdown(paths: &ConfigPaths, config: &Config) -> Result<
 - if a forced language yields no subtitle text, `lilaccaps` retries greedy decoding and can fall back to the detected language when it differs\n\n\
 ## Burn-in style behavior\n\
 - `burnin.font = \"auto\"` lets the renderer choose a suitable font, or you can force one with `lilaccaps burnin --font <name>`\n\
+- `burnin.colour = \"auto\"` keeps the renderer default colour, or you can force one with `lilaccaps burnin --colour <value>`; explicit colour values use the overlay renderer so the chosen fill colour is honored\n\
 - `burnin.size = 0` means auto-size from video height, or you can force a point size with `lilaccaps burnin --size <points>`\n\
 - `burnin.line_spacing = 0` means auto spacing; set a positive value in `lilaccaps.toml` to control the gap between lines in multiline subtitles\n\
 \n\
@@ -95,7 +96,7 @@ pub fn write_bootstrap_markdown(paths: &ConfigPaths, config: &Config) -> Result<
 - cue timing and indexes stay unchanged during translation\n\
 \n\
 ## Per-language burn-in styling\n\
-- `burnin.styles.<role>.font` and `burnin.styles.<role>.size` can style individual lines such as `source`, `en`, or `ja`\n\
+- `burnin.styles.<role>.font`, `burnin.styles.<role>.colour`, and `burnin.styles.<role>.size` can style individual lines such as `source`, `en`, or `ja`\n\
 - burn-in maps cue lines to these roles using `translate.line_order`\n\
 \n\
 ## Expected healthy status\n\
@@ -138,7 +139,7 @@ pub fn ensure_skill_file(config: &Config) -> Result<PathBuf> {
     }
 
     let content = format!(
-        "{GENERATED_SKILL_MARKER}\n# lilaccaps\n\nUse the `lilaccaps` CLI for transcription and subtitle rendering.\n\n## Commands\n- `lilaccaps doctor`\n- `lilaccaps status`\n- `lilaccaps transcribe <input>`\n- `lilaccaps transcribe <input> --lang <code>`\n- `lilaccaps translate <input.srt> --to en --to ja --append`\n- `lilaccaps burnin <video> --subs <subtitle-file>`\n- `lilaccaps burnin <video> --subs <subtitle-file> --font \"PingFang SC\" --size 42`\n\n## Notes\n- `burnin` is render-only.\n- transcription is a separate workflow.\n- `translate` can append one or more target-language lines to each cue for multilingual subtitles.\n- `transcribe.language = \"auto\"` detects a language first and then transcribes with that detected language explicitly.\n- `burnin.font = \"auto\"` lets the renderer choose a suitable font, while `burnin.size = 0` auto-scales captions from video height.\n- runtime home is configured via `lilaccaps.toml` and `LILACCAPS_HOME`.\n"
+        "{GENERATED_SKILL_MARKER}\n# lilaccaps\n\nUse the `lilaccaps` CLI for transcription and subtitle rendering.\n\n## Commands\n- `lilaccaps doctor`\n- `lilaccaps status`\n- `lilaccaps transcribe <input>`\n- `lilaccaps transcribe <input> --lang <code>`\n- `lilaccaps translate <input.srt> --to en --to ja --append`\n- `lilaccaps burnin <video> --subs <subtitle-file>`\n- `lilaccaps burnin <video> --subs <subtitle-file> --colour \"#ffd54f\" --size 42`\n\n## Notes\n- `burnin` is render-only.\n- transcription is a separate workflow.\n- `translate` can append one or more target-language lines to each cue for multilingual subtitles.\n- `transcribe.language = \"auto\"` detects a language first and then transcribes with that detected language explicitly.\n- `burnin.font = \"auto\"` lets the renderer choose a suitable font, `burnin.colour = \"auto\"` keeps the renderer default colour, and `burnin.size = 0` auto-scales captions from video height.\n- runtime home is configured via `lilaccaps.toml` and `LILACCAPS_HOME`.\n"
     );
 
     fs::write(skill_path, content)

@@ -38,6 +38,7 @@ const HIRAGINO_SANS_FONT_CANDIDATES: [&str; 2] = [
 #[derive(Debug, Clone)]
 pub struct BurninStyle {
     pub font: Option<String>,
+    pub colour: Option<String>,
     pub size: Option<u32>,
     pub line_spacing: Option<u32>,
     pub line_order: Vec<String>,
@@ -49,18 +50,23 @@ impl BurninStyle {
         self.font.clone().unwrap_or_else(|| "auto".to_string())
     }
 
+    pub fn colour_label(&self) -> String {
+        self.colour.clone().unwrap_or_else(|| "auto".to_string())
+    }
+
     fn has_line_overrides(&self) -> bool {
         !self.line_order.is_empty() && !self.line_styles.is_empty()
     }
 
     fn uses_overlay_renderer(&self) -> bool {
-        self.has_line_overrides() || self.line_spacing.is_some()
+        self.has_line_overrides() || self.line_spacing.is_some() || self.colour.is_some()
     }
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct LineStyle {
     pub font: Option<String>,
+    pub colour: Option<String>,
     pub size: Option<u32>,
 }
 
@@ -190,6 +196,11 @@ fn render_overlay_image(
                 .or(style.font.as_deref())
                 .map(|font| resolve_overlay_font(font, line))
                 .unwrap_or_else(|| select_overlay_font(line).to_string());
+            let fill_colour = line_style
+                .colour
+                .as_deref()
+                .or(style.colour.as_deref())
+                .unwrap_or("white");
             let point_size = line_style.size.or(style.size).unwrap_or(default_point_size);
             let vertical_padding = style
                 .line_spacing
@@ -201,7 +212,7 @@ fn render_overlay_image(
                 .arg("-font")
                 .arg(&font_path)
                 .arg("-fill")
-                .arg("white")
+                .arg(fill_colour)
                 .arg("-stroke")
                 .arg("black")
                 .arg("-strokewidth")
@@ -228,13 +239,14 @@ fn render_overlay_image(
             .as_deref()
             .map(|font| resolve_overlay_font(font, &cue.text))
             .unwrap_or_else(|| select_overlay_font(&cue.text).to_string());
+        let fill_colour = style.colour.as_deref().unwrap_or("white");
         command
             .arg("-background")
             .arg("none")
             .arg("-font")
             .arg(&font_path)
             .arg("-fill")
-            .arg("white")
+            .arg(fill_colour)
             .arg("-stroke")
             .arg("black")
             .arg("-strokewidth")
@@ -443,11 +455,13 @@ mod tests {
             "en".to_string(),
             LineStyle {
                 font: Some("Arial".to_string()),
+                colour: Some("#ffd54f".to_string()),
                 size: Some(30),
             },
         );
         let style = BurninStyle {
             font: None,
+            colour: None,
             size: None,
             line_spacing: None,
             line_order: vec!["source".to_string(), "en".to_string()],
@@ -476,8 +490,23 @@ mod tests {
     fn line_spacing_forces_overlay_renderer() {
         let style = BurninStyle {
             font: None,
+            colour: None,
             size: None,
             line_spacing: Some(3),
+            line_order: Vec::new(),
+            line_styles: HashMap::new(),
+        };
+
+        assert!(style.uses_overlay_renderer());
+    }
+
+    #[test]
+    fn explicit_colour_forces_overlay_renderer() {
+        let style = BurninStyle {
+            font: None,
+            colour: Some("#ffd54f".to_string()),
+            size: None,
+            line_spacing: None,
             line_order: Vec::new(),
             line_styles: HashMap::new(),
         };

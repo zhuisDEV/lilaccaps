@@ -100,6 +100,7 @@ The next implementation should leave the repo with:
 - Successful `transcribe` runs should stay quiet: ffmpeg audio extraction now runs with `-hide_banner -loglevel error`, and Whisper backend logs are routed through `whisper-rs` logging hooks so normal runs only print the CLI summary.
 - Burn-in style now supports CLI overrides plus TOML defaults for `font` and `size`; `font = "auto"` keeps renderer font selection, and `size = 0` keeps automatic height-based scaling.
 - `burnin.line_spacing` is now a TOML-only renderer setting; `0` means auto spacing, and a positive value forces the overlay renderer so multiline spacing can be honored consistently.
+- Burn-in colour now supports a global `burnin.colour` default plus per-line `burnin.styles.<role>.colour`; explicit colour values force the overlay renderer so custom fill colour is applied consistently.
 - Translation is a separate workflow: `translate` rewrites cue text but preserves cue timing and indexes exactly, so `burnin` can stay render-only.
 - Translation defaults now live under `[translate]` in `lilaccaps.toml`, and Gemini API credentials are loaded from `GEMINI_API_KEY` in the environment or from `$LILACCAPS_HOME/.env`.
 - Multilingual captions are represented as multi-line cue text, with `translate --append` adding one translated line per target language under the original subtitle text.

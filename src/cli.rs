@@ -88,6 +88,8 @@ pub struct BurninArgs {
     pub output: Option<PathBuf>,
     #[arg(long)]
     pub font: Option<String>,
+    #[arg(long = "colour", visible_alias = "color")]
+    pub colour: Option<String>,
     #[arg(long)]
     pub size: Option<u32>,
 }

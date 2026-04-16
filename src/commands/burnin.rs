@@ -10,6 +10,7 @@ pub fn run(args: BurninArgs) -> Result<()> {
         args.subs,
         args.output,
         args.font,
+        args.colour,
         args.size,
     )?;
     println!("command = burnin");
@@ -17,6 +18,7 @@ pub fn run(args: BurninArgs) -> Result<()> {
     println!("subs = {}", output.subs.display());
     println!("output = {}", output.output.display());
     println!("font = {}", output.font);
+    println!("colour = {}", output.colour);
     println!("size = {}", output.size);
     println!("line_spacing = {}", output.line_spacing);
     println!("status = {}", output.status);

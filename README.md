@@ -158,6 +158,7 @@ Important values:
 - `translate.append`
 - `translate.default_targets`
 - `burnin.font`
+- `burnin.colour`
 - `burnin.size`
 - `burnin.line_spacing`
 
@@ -210,6 +211,12 @@ ImageMagick fallback prefers a CJK-capable font for CJK subtitles and a lighter 
 otherwise. Set `burnin.font` to a system font name such as `"PingFang SC"` or `"Arial"` to
 force a specific font for burn-in, or pass `--font` on the CLI for a single run.
 
+`burnin.colour` defaults to `"auto"`, which keeps the renderer's default caption colour.
+Set it to an ImageMagick colour string such as `"yellow"`, `"#ffd54f"`, or `"rgb(255,220,120)"`
+to change subtitle fill colour, or pass `--colour` on the CLI for a single run. The CLI also
+accepts `--color` as an alias. Explicit colour values are applied through the overlay renderer
+so the configured fill colour is honored consistently.
+
 `burnin.size` defaults to `0`, which means auto-size from the video height. Set a positive
 number in `lilaccaps.toml` or pass `--size` on the CLI to force a point size. CLI values
 override TOML values for a single run.
@@ -221,7 +228,8 @@ This setting is applied by the ImageMagick overlay renderer; when you set it exp
 
 For per-language burn-in styling, define keyed styles under `burnin.styles` using the same
 labels that appear in `translate.line_order`, such as `source`, `en`, or `ja`. Set
-`font = "auto"` or omit `font` to keep renderer font selection per line.
+`font = "auto"` or omit `font` to keep renderer font selection per line. Set
+`colour = "auto"` or omit `colour` to keep the renderer's default colour per line.
 
 Example:
 
@@ -233,19 +241,23 @@ line_order = ["source", "ja", "en"]
 
 [burnin]
 font = "auto"
+colour = "auto"
 size = 0
 line_spacing = 1
 
 [burnin.styles.source]
 font = "auto"
+colour = "auto"
 size = 42
 
 [burnin.styles.ja]
 font = "auto"
+colour = "auto"
 size = 38
 
 [burnin.styles.en]
 font = "auto"
+colour = "auto"
 size = 34
 ```
 

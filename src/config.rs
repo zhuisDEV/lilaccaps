@@ -70,6 +70,8 @@ pub struct ModelConfig {
 pub struct BurninConfig {
     #[serde(default = "default_burnin_font")]
     pub font: String,
+    #[serde(default = "default_burnin_colour", alias = "color")]
+    pub colour: String,
     #[serde(default = "default_burnin_size")]
     pub size: u32,
     #[serde(default = "default_burnin_line_spacing")]
@@ -93,6 +95,8 @@ pub struct TranslateConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct BurninLineStyleConfig {
     pub font: Option<String>,
+    #[serde(alias = "color")]
+    pub colour: Option<String>,
     pub size: Option<u32>,
 }
 
@@ -173,6 +177,7 @@ pub fn default_config() -> Result<Config> {
         },
         burnin: BurninConfig {
             font: default_burnin_font(),
+            colour: default_burnin_colour(),
             size: default_burnin_size(),
             line_spacing: default_burnin_line_spacing(),
             styles: HashMap::new(),
@@ -190,6 +195,10 @@ pub fn default_transcribe_language() -> String {
 }
 
 pub fn default_burnin_font() -> String {
+    "auto".to_string()
+}
+
+pub fn default_burnin_colour() -> String {
     "auto".to_string()
 }
 
@@ -213,6 +222,7 @@ impl Default for BurninConfig {
     fn default() -> Self {
         Self {
             font: default_burnin_font(),
+            colour: default_burnin_colour(),
             size: default_burnin_size(),
             line_spacing: default_burnin_line_spacing(),
             styles: HashMap::new(),
@@ -284,6 +294,7 @@ mod tests {
         let config = default_config().expect("default config should build");
         assert_eq!(config.transcribe.language, "auto");
         assert_eq!(config.burnin.font, "auto");
+        assert_eq!(config.burnin.colour, "auto");
         assert_eq!(config.burnin.size, 0);
         assert_eq!(config.burnin.line_spacing, 0);
         assert!(config.burnin.styles.is_empty());
@@ -307,6 +318,7 @@ github_repo = "zhuisDEV/lilaccaps"
 
 [burnin]
 font = "auto"
+colour = "auto"
 size = 0
 line_spacing = 0
 styles = {}
@@ -324,6 +336,7 @@ id = "base"
         let config: Config = toml::from_str(raw).expect("older config should parse");
         assert_eq!(config.transcribe.language, "auto");
         assert_eq!(config.burnin.font, "auto");
+        assert_eq!(config.burnin.colour, "auto");
         assert_eq!(config.burnin.size, 0);
         assert_eq!(config.burnin.line_spacing, 0);
         assert!(config.burnin.styles.is_empty());
