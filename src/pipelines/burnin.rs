@@ -107,11 +107,13 @@ fn resolve_style(
     cli_size: Option<u32>,
 ) -> BurninStyle {
     let font = cli_font.or_else(|| normalize_font(config_font));
-    let colour = if config_advanced_styling {
-        cli_colour.or_else(|| normalize_colour(config_colour))
-    } else {
-        None
-    };
+    let colour = cli_colour.or_else(|| {
+        if config_advanced_styling {
+            normalize_colour(config_colour)
+        } else {
+            None
+        }
+    });
     let size = match cli_size.unwrap_or(config_size) {
         0 => None,
         value => Some(value),
@@ -182,7 +184,7 @@ mod tests {
     use crate::config::BurninLineStyleConfig;
 
     #[test]
-    fn disabling_advanced_styling_clears_advanced_fields() {
+    fn disabling_advanced_styling_clears_config_advanced_fields() {
         let style = resolve_style(
             &["source".to_string(), "en".to_string()],
             false,
@@ -199,11 +201,39 @@ mod tests {
                 },
             )]),
             None,
-            Some("#00ff00".to_string()),
+            None,
             None,
         );
 
         assert!(style.colour.is_none());
+        assert!(style.line_spacing.is_none());
+        assert!(style.line_order.is_empty());
+        assert!(style.line_styles.is_empty());
+    }
+
+    #[test]
+    fn cli_colour_overrides_disabled_advanced_styling() {
+        let style = resolve_style(
+            &["source".to_string(), "en".to_string()],
+            false,
+            "auto",
+            "auto",
+            0,
+            1,
+            &HashMap::from([(
+                "source".to_string(),
+                BurninLineStyleConfig {
+                    font: Some("auto".to_string()),
+                    colour: Some("#ffd54f".to_string()),
+                    size: Some(30),
+                },
+            )]),
+            None,
+            Some("#00ff00".to_string()),
+            None,
+        );
+
+        assert_eq!(style.colour.as_deref(), Some("#00ff00"));
         assert!(style.line_spacing.is_none());
         assert!(style.line_order.is_empty());
         assert!(style.line_styles.is_empty());

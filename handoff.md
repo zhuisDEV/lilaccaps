@@ -99,7 +99,7 @@ The next implementation should leave the repo with:
 - README and generated bootstrap docs should distinguish minimum `ffmpeg` support from the recommended Homebrew `ffmpeg-full` install for native libass-based burn-in.
 - Successful `transcribe` runs should stay quiet: ffmpeg audio extraction now runs with `-hide_banner -loglevel error`, and Whisper backend logs are routed through `whisper-rs` logging hooks so normal runs only print the CLI summary.
 - Burn-in style now supports CLI overrides plus TOML defaults for `font` and `size`; `font = "auto"` keeps renderer font selection, and `size = 0` keeps automatic height-based scaling.
-- `burnin.advanced_styling` is the top-level switch for advanced multiline styling; when it is `false`, custom colour, line spacing, and `burnin.styles.<role>` are ignored so ffmpeg/libass can stay on the primary path when available.
+- `burnin.advanced_styling` is the top-level switch for advanced multiline styling; when it is `false`, configured custom colour, line spacing, and `burnin.styles.<role>` are ignored so ffmpeg/libass can stay on the primary path when available, but explicit CLI `--colour` still overrides config for a single run.
 - `burnin.line_spacing` is now a TOML-only renderer setting; `0` means auto spacing, and a positive value forces the overlay renderer so multiline spacing can be honored consistently.
 - Burn-in colour now supports a global `burnin.colour` default plus per-line `burnin.styles.<role>.colour`; explicit colour values force the overlay renderer so custom fill colour is applied consistently.
 - `lilaccaps burnin` should print the actual `renderer` and `renderer_reason` to make fallback selection visible to the user.

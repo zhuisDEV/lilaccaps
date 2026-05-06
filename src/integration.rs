@@ -84,7 +84,7 @@ pub fn write_bootstrap_markdown(paths: &ConfigPaths, config: &Config) -> Result<
 - `lilaccaps transcribe --lang <code>` forces a language for that run\n\
 - if a forced language yields no subtitle text, `lilaccaps` retries greedy decoding and can fall back to the detected language when it differs\n\n\
 ## Burn-in style behavior\n\
-- `burnin.advanced_styling = true` enables per-line styling, custom spacing, and custom colours; set it to `false` to ignore those advanced settings and prefer the primary ffmpeg subtitle path when available\n\
+- `burnin.advanced_styling = true` enables per-line styling, custom spacing, and configured custom colours; set it to `false` to ignore those configured advanced settings and prefer the primary ffmpeg subtitle path when available; CLI `--colour` still overrides config for one run\n\
 - `burnin.font = \"auto\"` lets the renderer choose a suitable font, or you can force one with `lilaccaps burnin --font <name>`\n\
 - `burnin.colour = \"auto\"` keeps the renderer default colour, or you can force one with `lilaccaps burnin --colour <value>`; explicit colour values use the overlay renderer so the chosen fill colour is honored\n\
 - `burnin.size = 0` means auto-size from video height, or you can force a point size with `lilaccaps burnin --size <points>`\n\

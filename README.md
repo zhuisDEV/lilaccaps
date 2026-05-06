@@ -235,9 +235,10 @@ override TOML values for a single run.
 This setting is applied by the ImageMagick overlay renderer; when you set it explicitly,
 `lilaccaps` prefers that renderer so the spacing value is honored.
 
-`burnin.advanced_styling` defaults to `true`. Set it to `false` to ignore custom colour,
-custom line spacing, and all `burnin.styles.<role>` per-line styling so `lilaccaps` can stay
-on the primary `ffmpeg` subtitle path when your `ffmpeg` build supports it.
+`burnin.advanced_styling` defaults to `true`. Set it to `false` to ignore configured custom
+colour, custom line spacing, and all `burnin.styles.<role>` per-line styling so `lilaccaps`
+can stay on the primary `ffmpeg` subtitle path when your `ffmpeg` build supports it. An
+explicit CLI `--colour` still overrides config for that single run.
 
 For per-language burn-in styling, define keyed styles under `burnin.styles` using the same
 labels that appear in `translate.line_order`, such as `source`, `en`, or `ja`. Set
