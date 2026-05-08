@@ -94,6 +94,7 @@ fn default_output_path(video: &Path) -> PathBuf {
     video.with_file_name(format!("{stem}.burned.{extension}"))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolve_style(
     config_line_order: &[String],
     config_advanced_styling: bool,

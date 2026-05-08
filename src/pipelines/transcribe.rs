@@ -1,4 +1,5 @@
 use std::fs;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Once;
 
@@ -15,6 +16,8 @@ use crate::runtime::{ensure_dir, tmp_dir};
 use crate::subtitles::{SubtitleCue, write_srt_file};
 
 static WHISPER_LOGGING_HOOKS: Once = Once::new();
+const LANGUAGE_DETECTION_SECONDS: usize = 30;
+const TRANSCRIPTION_CHUNK_SECONDS: usize = 30;
 
 #[derive(Debug, Clone)]
 pub struct TranscribeOutput {
@@ -32,6 +35,7 @@ pub struct TranscribeOutput {
 struct AttemptDiagnostics {
     language: String,
     decoding_strategy: &'static str,
+    chunk_count: usize,
     segment_count: usize,
     non_empty_segments: usize,
 }
@@ -62,9 +66,10 @@ impl DecodeStrategy {
 impl AttemptDiagnostics {
     fn summary(&self) -> String {
         format!(
-            "language={} decoding={} total_segments={} non_empty_segments={} blank_segments={}",
+            "language={} decoding={} chunks={} total_segments={} non_empty_segments={} blank_segments={}",
             self.language,
             self.decoding_strategy,
+            self.chunk_count,
             self.segment_count,
             self.non_empty_segments,
             self.segment_count.saturating_sub(self.non_empty_segments)
@@ -160,15 +165,35 @@ fn transcribe_to_cues(
     audio_path: &Path,
     language: Option<&str>,
 ) -> Result<(Vec<SubtitleCue>, String, bool, bool, &'static str)> {
-    let samples: Vec<i16> = hound::WavReader::open(audio_path)
-        .with_context(|| format!("failed to open extracted wav {}", audio_path.display()))?
+    let reader = hound::WavReader::open(audio_path)
+        .with_context(|| format!("failed to open extracted wav {}", audio_path.display()))?;
+    let sample_rate = reader.spec().sample_rate as usize;
+    let samples: Vec<i16> = reader
         .into_samples::<i16>()
         .collect::<std::result::Result<Vec<_>, _>>()
         .with_context(|| format!("failed to read wav samples from {}", audio_path.display()))?;
+    if sample_rate == 0 {
+        bail!(
+            "extracted wav has invalid sample rate: {}",
+            audio_path.display()
+        );
+    }
 
     let mut audio = vec![0.0f32; samples.len()];
     whisper_rs::convert_integer_to_float_audio(&samples, &mut audio)
         .context("failed to convert wav samples to whisper input format")?;
+    if audio.is_empty() {
+        bail!(
+            "extracted wav contains no audio samples: {}",
+            audio_path.display()
+        );
+    }
+    if audio.len() > sample_rate.saturating_mul(60) {
+        eprintln!(
+            "transcribe_audio_duration_seconds = {:.1}",
+            audio.len() as f64 / sample_rate as f64
+        );
+    }
 
     let ctx = WhisperContext::new_with_params(
         model_path
@@ -177,17 +202,18 @@ fn transcribe_to_cues(
         WhisperContextParameters::default(),
     )
     .with_context(|| format!("failed to load whisper model {}", model_path.display()))?;
+
     let detected_language = match language {
-        Some(_) => detect_language(&ctx, &audio).ok(),
-        None => Some(detect_language(&ctx, &audio)?),
+        Some(_) => None,
+        None => Some(detect_language(&ctx, detection_audio(&audio, sample_rate))?),
     };
     let attempts = build_attempts(language, detected_language.as_deref());
-
     let mut diagnostics = Vec::new();
     for attempt in attempts {
-        let (cues, attempt_diagnostics) = transcribe_once(
+        let (cues, attempt_diagnostics) = transcribe_attempt(
             &ctx,
             &audio,
+            sample_rate,
             Some(attempt.language.as_str()),
             attempt.strategy,
         )?;
@@ -201,6 +227,33 @@ fn transcribe_to_cues(
             ));
         }
         diagnostics.push(attempt_diagnostics);
+    }
+
+    if let Some(requested_language) = language {
+        let detected_language = detect_language(&ctx, detection_audio(&audio, sample_rate)).ok();
+        if let Some(detected_language) = detected_language.as_deref()
+            && detected_language != requested_language
+        {
+            for attempt in detected_language_attempts(detected_language) {
+                let (cues, attempt_diagnostics) = transcribe_attempt(
+                    &ctx,
+                    &audio,
+                    sample_rate,
+                    Some(attempt.language.as_str()),
+                    attempt.strategy,
+                )?;
+                if !cues.is_empty() {
+                    return Ok((
+                        cues,
+                        attempt.language,
+                        attempt.fallback_language_used,
+                        attempt.fallback_decoding_used,
+                        attempt.strategy.label(),
+                    ));
+                }
+                diagnostics.push(attempt_diagnostics);
+            }
+        }
     }
 
     let summary = diagnostics
@@ -227,24 +280,36 @@ fn build_attempts(
 
     if let (Some(requested_language), Some(detected_language)) =
         (requested_language, detected_language)
+        && detected_language != requested_language
     {
-        if detected_language != requested_language {
-            attempts.push(AttemptPlan::new(
-                detected_language,
-                true,
-                false,
-                DecodeStrategy::BeamSearch,
-            ));
-            attempts.push(AttemptPlan::new(
-                detected_language,
-                true,
-                true,
-                DecodeStrategy::Greedy,
-            ));
-        }
+        attempts.push(AttemptPlan::new(
+            detected_language,
+            true,
+            false,
+            DecodeStrategy::BeamSearch,
+        ));
+        attempts.push(AttemptPlan::new(
+            detected_language,
+            true,
+            true,
+            DecodeStrategy::Greedy,
+        ));
     }
 
     attempts
+}
+
+fn detected_language_attempts(detected_language: &str) -> Vec<AttemptPlan> {
+    vec![
+        AttemptPlan::new(detected_language, true, false, DecodeStrategy::BeamSearch),
+        AttemptPlan::new(detected_language, true, true, DecodeStrategy::Greedy),
+    ]
+}
+
+fn detection_audio(audio: &[f32], sample_rate: usize) -> &[f32] {
+    let sample_count = sample_rate.saturating_mul(LANGUAGE_DETECTION_SECONDS);
+    let end = audio.len().min(sample_count);
+    &audio[..end]
 }
 
 fn detect_language(ctx: &WhisperContext, audio: &[f32]) -> Result<String> {
@@ -268,11 +333,61 @@ fn detect_language(ctx: &WhisperContext, audio: &[f32]) -> Result<String> {
         .ok_or_else(|| anyhow::anyhow!("whisper returned unknown language id {lang_id}"))
 }
 
-fn transcribe_once(
+fn transcribe_attempt(
+    ctx: &WhisperContext,
+    audio: &[f32],
+    sample_rate: usize,
+    language: Option<&str>,
+    strategy: DecodeStrategy,
+) -> Result<(Vec<SubtitleCue>, AttemptDiagnostics)> {
+    let chunks = audio_chunks(audio.len(), sample_rate, TRANSCRIPTION_CHUNK_SECONDS);
+    let mut cues = Vec::new();
+    let mut segment_count = 0usize;
+    let mut non_empty_segments = 0usize;
+
+    for (index, chunk) in chunks.iter().enumerate() {
+        if chunks.len() > 1 {
+            eprintln!(
+                "transcribe_progress = chunk {}/{} language={} decoding={} start_seconds={:.1} end_seconds={:.1}",
+                index + 1,
+                chunks.len(),
+                language.unwrap_or("auto"),
+                strategy.label(),
+                chunk.start as f64 / sample_rate as f64,
+                chunk.end as f64 / sample_rate as f64
+            );
+        }
+
+        let offset_cs = samples_to_centiseconds(chunk.start, sample_rate);
+        let (mut chunk_cues, chunk_diagnostics) =
+            transcribe_chunk(ctx, &audio[chunk.clone()], language, strategy, offset_cs)?;
+        segment_count += chunk_diagnostics.segment_count;
+        non_empty_segments += chunk_diagnostics.non_empty_segments;
+        cues.append(&mut chunk_cues);
+    }
+
+    for (index, cue) in cues.iter_mut().enumerate() {
+        cue.index = index + 1;
+    }
+
+    Ok((
+        cues,
+        AttemptDiagnostics {
+            language: language.unwrap_or("auto").to_string(),
+            decoding_strategy: strategy.label(),
+            chunk_count: chunks.len(),
+            segment_count,
+            non_empty_segments,
+        },
+    ))
+}
+
+fn transcribe_chunk(
     ctx: &WhisperContext,
     audio: &[f32],
     language: Option<&str>,
     strategy: DecodeStrategy,
+    offset_cs: i64,
 ) -> Result<(Vec<SubtitleCue>, AttemptDiagnostics)> {
     let mut state = ctx
         .create_state()
@@ -300,13 +415,36 @@ fn transcribe_once(
         .full(params, audio)
         .context("failed to transcribe audio with whisper")?;
 
-    collect_cues(&state, language, strategy)
+    collect_cues(&state, language, strategy, offset_cs)
+}
+
+fn audio_chunks(
+    sample_count: usize,
+    sample_rate: usize,
+    chunk_seconds: usize,
+) -> Vec<Range<usize>> {
+    let chunk_size = sample_rate.saturating_mul(chunk_seconds).max(1);
+    let mut chunks = Vec::new();
+    let mut start = 0usize;
+
+    while start < sample_count {
+        let end = sample_count.min(start.saturating_add(chunk_size));
+        chunks.push(start..end);
+        start = end;
+    }
+
+    chunks
+}
+
+fn samples_to_centiseconds(sample_count: usize, sample_rate: usize) -> i64 {
+    ((sample_count as u64).saturating_mul(100) / sample_rate.max(1) as u64) as i64
 }
 
 fn collect_cues(
     state: &whisper_rs::WhisperState,
     language: Option<&str>,
     strategy: DecodeStrategy,
+    offset_cs: i64,
 ) -> Result<(Vec<SubtitleCue>, AttemptDiagnostics)> {
     let mut cues = Vec::new();
     let mut segment_count = 0usize;
@@ -323,8 +461,8 @@ fn collect_cues(
 
         cues.push(SubtitleCue {
             index: index + 1,
-            start_cs: segment.start_timestamp(),
-            end_cs: segment.end_timestamp(),
+            start_cs: segment.start_timestamp() + offset_cs,
+            end_cs: segment.end_timestamp() + offset_cs,
             text,
         });
     }
@@ -335,6 +473,7 @@ fn collect_cues(
         AttemptDiagnostics {
             language: language.unwrap_or("auto").to_string(),
             decoding_strategy: strategy.label(),
+            chunk_count: 1,
             segment_count,
             non_empty_segments,
         },
@@ -363,7 +502,8 @@ fn resolve_language(cli_lang: Option<&str>, config_lang: Option<&str>) -> Result
 #[cfg(test)]
 mod tests {
     use super::{
-        AttemptDiagnostics, AttemptPlan, DecodeStrategy, build_attempts, resolve_language,
+        AttemptDiagnostics, AttemptPlan, DecodeStrategy, audio_chunks, build_attempts,
+        detected_language_attempts, detection_audio, resolve_language, samples_to_centiseconds,
     };
 
     #[test]
@@ -398,12 +538,14 @@ mod tests {
         let diagnostics = AttemptDiagnostics {
             language: "zh".to_string(),
             decoding_strategy: "beam",
+            chunk_count: 2,
             segment_count: 4,
             non_empty_segments: 1,
         };
         let summary = diagnostics.summary();
         assert!(summary.contains("language=zh"));
         assert!(summary.contains("decoding=beam"));
+        assert!(summary.contains("chunks=2"));
         assert!(summary.contains("blank_segments=3"));
     }
 
@@ -452,5 +594,59 @@ mod tests {
             attempts[3],
             AttemptPlan::new("zh", true, true, DecodeStrategy::Greedy)
         );
+    }
+
+    #[test]
+    fn explicit_language_attempts_do_not_require_detection_first() {
+        let attempts = build_attempts(Some("ja"), None);
+
+        assert_eq!(attempts.len(), 2);
+        assert_eq!(
+            attempts[0],
+            AttemptPlan::new("ja", false, false, DecodeStrategy::BeamSearch)
+        );
+        assert_eq!(
+            attempts[1],
+            AttemptPlan::new("ja", false, true, DecodeStrategy::Greedy)
+        );
+    }
+
+    #[test]
+    fn detected_language_fallback_attempts_are_marked() {
+        let attempts = detected_language_attempts("zh");
+
+        assert_eq!(attempts.len(), 2);
+        assert_eq!(
+            attempts[0],
+            AttemptPlan::new("zh", true, false, DecodeStrategy::BeamSearch)
+        );
+        assert_eq!(
+            attempts[1],
+            AttemptPlan::new("zh", true, true, DecodeStrategy::Greedy)
+        );
+    }
+
+    #[test]
+    fn detection_audio_uses_initial_window() {
+        let audio = vec![0.0; 16_000 * 40];
+        let window = detection_audio(&audio, 16_000);
+
+        assert_eq!(window.len(), 16_000 * 30);
+    }
+
+    #[test]
+    fn audio_chunks_bound_long_input() {
+        let chunks = audio_chunks(16_000 * 75, 16_000, 30);
+
+        assert_eq!(
+            chunks,
+            vec![0..480_000, 480_000..960_000, 960_000..1_200_000]
+        );
+    }
+
+    #[test]
+    fn samples_convert_to_centiseconds() {
+        assert_eq!(samples_to_centiseconds(16_000, 16_000), 100);
+        assert_eq!(samples_to_centiseconds(24_000, 16_000), 150);
     }
 }

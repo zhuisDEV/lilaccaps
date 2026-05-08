@@ -407,7 +407,7 @@ fn overlay_renderer_reasons(style: &BurninStyle) -> Vec<&'static str> {
     reasons
 }
 
-fn line_style_for_index<'a>(style: &'a BurninStyle, index: usize, line: &str) -> LineStyle {
+fn line_style_for_index(style: &BurninStyle, index: usize, line: &str) -> LineStyle {
     let role = style
         .line_order
         .get(index)

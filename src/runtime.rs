@@ -176,10 +176,10 @@ pub fn collect_doctor_report() -> DoctorReport {
             status.dependency.name, status.dependency.purpose, status.dependency.install_hint
         ));
 
-        if let Some(package) = status.dependency.brew_package {
-            if !brew_packages.iter().any(|item| item == package) {
-                brew_packages.push(package.to_string());
-            }
+        if let Some(package) = status.dependency.brew_package
+            && !brew_packages.iter().any(|item| item == package)
+        {
+            brew_packages.push(package.to_string());
         }
     }
 

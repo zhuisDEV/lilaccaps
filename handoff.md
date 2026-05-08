@@ -111,3 +111,6 @@ The next implementation should leave the repo with:
 - If explicit per-language fonts look worse than the renderer defaults, set `burnin.styles.<role>.font = "auto"` (or omit the per-role font) and keep only the per-language sizes.
 - The ImageMagick multiline fallback must create each `label:` image before applying border/stacking operations; otherwise `magick` can fail with `no images found for operation '-border'`.
 - The multiline ImageMagick fallback should keep vertical padding tight; large fixed borders make multilingual subtitle stacks look too loose.
+- The 2026-05-08 transcribe hang report was caused by the repro media being 3750.7 seconds long, not by an ffmpeg extraction failure; the intermediate mono16k WAV had the same duration, so Whisper was silently processing about 62.5 minutes of audio.
+- Transcription now detects language from only the first 30 seconds, avoids pre-detecting language before forced-language attempts, and processes audio in 30-second chunks with stderr duration/progress for long inputs.
+- The v0.1.11 release also clears current `cargo clippy -- -D warnings` findings, including pre-existing small style warnings in burn-in, render, and runtime helper code.

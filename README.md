@@ -176,20 +176,27 @@ Important values:
 `"en"`, `"zh"`, or `"ja"` to force transcription in a specific language. `--lang` on
 `lilaccaps transcribe` overrides the config value for a single run.
 
-When `language = "auto"`, `lilaccaps` now performs a dedicated Whisper language-detection pass
-first and then transcribes with the detected language explicitly. That avoids the
-`detect_language=true` detect-only path in `whisper.cpp` and reports the effective language in
-the command output.
+When `language = "auto"`, `lilaccaps` samples the first 30 seconds for Whisper language detection
+and then transcribes with the detected language explicitly. That avoids the `detect_language=true`
+detect-only path in `whisper.cpp` and reports the effective language in the command output.
 
 When you force a language, `lilaccaps` tries:
 
 - requested language with beam search
 - requested language with greedy decoding
-- detected language with beam search, if detection succeeds and differs
-- detected language with greedy decoding, if detection succeeds and differs
+- detected language with beam search, if the requested attempts produce no text and detection
+  succeeds with a different language
+- detected language with greedy decoding, if the requested attempts produce no text and detection
+  succeeds with a different language
 
 If all attempts still produce no subtitle text, the terminal error includes per-attempt
 segment diagnostics.
+
+Transcription runs in bounded 30-second chunks. For inputs longer than one minute, the command
+prints the extracted audio duration to stderr, and multi-chunk runs print chunk progress to stderr
+while preserving the normal stdout summary for successful runs. This makes accidentally long media,
+such as a downloaded file whose metadata says it is an hour long, visible instead of looking like a
+post-audio-prep hang.
 
 Supported `transcribe.model.id` values currently include `tiny`, `base`, `small`, `medium`
 and their `.en` variants. For Chinese, Japanese, and other non-English speech, use the
