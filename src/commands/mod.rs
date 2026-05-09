@@ -6,3 +6,4 @@ pub mod transcribe;
 pub mod translate;
 pub mod uninstall;
 pub mod update;
+pub mod watermark;

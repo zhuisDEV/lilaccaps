@@ -80,7 +80,7 @@ pub fn write_bootstrap_markdown(paths: &ConfigPaths, config: &Config) -> Result<
 3. Run `lilaccaps install` to initialize config, runtime folders, the model, and the generated skill file.\n\
 4. Run `lilaccaps doctor` or `lilaccaps status` to verify config and integration health.\n\n\
 ## Transcription language behavior\n\
-- `transcribe.language = \"auto\"` triggers a dedicated language-detection pass and then transcribes with the detected language explicitly\n\
+- `transcribe.language = \"auto\"` samples the first 30 seconds for language detection and then transcribes with the detected language explicitly\n\
 - `lilaccaps transcribe --lang <code>` forces a language for that run\n\
 - if a forced language yields no subtitle text, `lilaccaps` retries greedy decoding and can fall back to the detected language when it differs\n\n\
 ## Burn-in style behavior\n\
@@ -90,6 +90,12 @@ pub fn write_bootstrap_markdown(paths: &ConfigPaths, config: &Config) -> Result<
 - `burnin.size = 0` means auto-size from video height, or you can force a point size with `lilaccaps burnin --size <points>`\n\
 - `burnin.line_spacing = 0` means auto spacing; set a positive value in `lilaccaps.toml` to control the gap between lines in multiline subtitles\n\
 - `lilaccaps burnin` reports `renderer` plus `renderer_reason` so you can see when advanced styling forces the overlay fallback\n\
+\n\
+## Watermark notes\n\
+- `lilaccaps watermark <video> --text <text>` applies a text watermark\n\
+- `lilaccaps watermark <video> --image <path>` applies an image watermark\n\
+- watermark options include `--position`, `--opacity`, `--size`, and `--margin`; image `--size` is target width, text `--size` is font size\n\
+- text watermarks require the `ffmpeg` `drawtext` filter, and image watermarks require the `overlay` filter\n\
 \n\
 ## Translation behavior\n\
 - `lilaccaps translate --to en --to ja --append` appends one translated line per target language under the original cue text\n\
@@ -141,7 +147,7 @@ pub fn ensure_skill_file(config: &Config) -> Result<PathBuf> {
     }
 
     let content = format!(
-        "{GENERATED_SKILL_MARKER}\n# lilaccaps\n\nUse the `lilaccaps` CLI for transcription and subtitle rendering.\n\n## Commands\n- `lilaccaps doctor`\n- `lilaccaps status`\n- `lilaccaps transcribe <input>`\n- `lilaccaps transcribe <input> --lang <code>`\n- `lilaccaps translate <input.srt> --to en --to ja --append`\n- `lilaccaps burnin <video> --subs <subtitle-file>`\n- `lilaccaps burnin <video> --subs <subtitle-file> --colour \"#ffd54f\" --size 42`\n\n## Notes\n- `burnin` is render-only.\n- transcription is a separate workflow.\n- `translate` can append one or more target-language lines to each cue for multilingual subtitles.\n- `transcribe.language = \"auto\"` detects a language first and then transcribes with that detected language explicitly.\n- `burnin.font = \"auto\"` lets the renderer choose a suitable font, `burnin.colour = \"auto\"` keeps the renderer default colour, and `burnin.size = 0` auto-scales captions from video height.\n- runtime home is configured via `lilaccaps.toml` and `LILACCAPS_HOME`.\n"
+        "{GENERATED_SKILL_MARKER}\n# lilaccaps\n\nUse the `lilaccaps` CLI for transcription, subtitle rendering, and video watermarks.\n\n## Commands\n- `lilaccaps doctor`\n- `lilaccaps status`\n- `lilaccaps transcribe <input>`\n- `lilaccaps transcribe <input> --lang <code>`\n- `lilaccaps translate <input.srt> --to en --to ja --append`\n- `lilaccaps burnin <video> --subs <subtitle-file>`\n- `lilaccaps burnin <video> --subs <subtitle-file> --colour \"#ffd54f\" --size 42`\n- `lilaccaps watermark <video> --text \"lilac\"`\n- `lilaccaps watermark <video> --image <logo.png> --opacity 0.45 --size 180`\n\n## Notes\n- `burnin` is render-only.\n- `watermark` is render-only and accepts exactly one of `--text` or `--image`.\n- transcription is a separate workflow.\n- `translate` can append one or more target-language lines to each cue for multilingual subtitles.\n- `transcribe.language = \"auto\"` samples the first 30 seconds for language detection and then transcribes with that detected language explicitly.\n- `burnin.font = \"auto\"` lets the renderer choose a suitable font, `burnin.colour = \"auto\"` keeps the renderer default colour, and `burnin.size = 0` auto-scales captions from video height.\n- watermark `--position` supports `top-left`, `top-right`, `bottom-left`, `bottom-right`, and `center`.\n- runtime home is configured via `lilaccaps.toml` and `LILACCAPS_HOME`.\n"
     );
 
     fs::write(skill_path, content)

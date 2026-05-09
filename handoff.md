@@ -1,10 +1,12 @@
 # lilaccaps Implementation Handoff
 
 ## Goal
-Implement a clean `lilaccaps` CLI with two separate primary workflows:
+Implement a clean `lilaccaps` CLI with separate primary workflows:
 
 1. transcribe video/audio into subtitle output
 2. burn an existing subtitle file into a video
+3. translate subtitle text without changing timing
+4. apply a watermark to a video
 
 Do not collapse these into one command.
 
@@ -13,17 +15,20 @@ Do not collapse these into one command.
 - CLI is unified under `lilaccaps`
 - `lilaccaps burnin` is render-only
 - Caption generation is a separate command/workflow
+- `lilaccaps watermark` is render-only and separate from subtitle workflows
 - Video/audio to transcription may be delegated by the main OpenClaw agent to a subagent
 - Use Rust/TS/Deno
 - Keep the primary flow clean
 - Add fallback only after the main path is solid
 
-## Recommended First Cut
-Define two commands only:
+## Current Command Set
+Keep the main workflows explicit:
 
 ```text
 lilaccaps transcribe <input>
 lilaccaps burnin <video> --subs <subtitle-file>
+lilaccaps watermark <video> --text <text>
+lilaccaps watermark <video> --image <logo.png>
 ```
 
 ## Implementation Boundary
@@ -48,6 +53,18 @@ Owns:
 Does not own:
 - transcription
 - subtitle generation
+
+### `watermark`
+Owns:
+- validating video input
+- validating exactly one text or image watermark input
+- applying text or image overlay rendering
+- writing final watermarked video
+
+Does not own:
+- transcription
+- subtitle generation
+- subtitle burn-in rendering
 
 ## Engineering Notes
 - Keep command handlers thin
@@ -114,3 +131,7 @@ The next implementation should leave the repo with:
 - The 2026-05-08 transcribe hang report was caused by the repro media being 3750.7 seconds long, not by an ffmpeg extraction failure; the intermediate mono16k WAV had the same duration, so Whisper was silently processing about 62.5 minutes of audio.
 - Transcription now detects language from only the first 30 seconds, avoids pre-detecting language before forced-language attempts, and processes audio in 30-second chunks with stderr duration/progress for long inputs.
 - The v0.1.11 release also clears current `cargo clippy -- -D warnings` findings, including pre-existing small style warnings in burn-in, render, and runtime helper code.
+- Watermarking is a separate render-only workflow: `lilaccaps watermark <video> --text <text>` or `--image <path>`, with `--position`, `--opacity`, `--size`, and `--margin` handled by ffmpeg drawtext/overlay filters.
+- Removed the obsolete `transcribe-hang-report.md` scratch report after the v0.1.11 transcription hang fix was confirmed.
+- Removed the obsolete `lilacreport.md` scratch report after confirming the burn-in `--colour` override bug is already fixed by CLI colour precedence.
+- v0.1.12 audit updated `rustls-webpki` to clear RustSec advisories and added watermark ffmpeg filter preflight checks for `drawtext` and `overlay`.

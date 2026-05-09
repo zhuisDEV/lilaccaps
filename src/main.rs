@@ -10,6 +10,7 @@ mod render;
 mod runtime;
 mod subtitles;
 mod translate;
+mod watermark;
 
 use anyhow::Result;
 

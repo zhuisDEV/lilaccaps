@@ -4,11 +4,12 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![Rust](https://img.shields.io/badge/language-Rust-orange.svg)](https://www.rust-lang.org/)
 
-`lilaccaps` is a clean Rust CLI for two separate workflows:
+`lilaccaps` is a clean Rust CLI for separate subtitle and video rendering workflows:
 
 1. transcribe local video or audio into subtitle files
 2. translate an existing subtitle file into one or more target languages
 3. burn an existing subtitle file into a video
+4. apply a text or image watermark to a video
 
 The command model stays explicit:
 
@@ -17,19 +18,20 @@ The command model stays explicit:
 - `lilaccaps transcribe` generates subtitle artifacts such as `.srt`
 - `lilaccaps translate` adds one or more translated lines to subtitle cues
 - `lilaccaps burnin` is render-only and never hides transcription inside the command
+- `lilaccaps watermark` applies text or image watermarks without touching subtitles
 
 ## Project Cards
 
-| Transcribe | Translate | Burn-in | Lifecycle |
-| --- | --- | --- | --- |
-| Extract audio with `ffmpeg`, transcribe with Whisper, write `.srt` | Render an existing subtitle file into video | Install, status, update, and uninstall support |
-| Primary flow stays subtitle-first | Append multilingual lines to existing cues via Gemini | Primary renderer uses `ffmpeg` subtitle filters when available | Configured with `lilaccaps.toml` and `LILACCAPS_HOME` |
-| Output path is explicit | Cue timing and indexes stay unchanged | Fallback renderer uses ImageMagick overlays when needed | OpenClaw skill bootstrap is supported |
+| Transcribe | Translate | Burn-in | Watermark | Lifecycle |
+| --- | --- | --- | --- | --- |
+| Extract audio with `ffmpeg`, transcribe with Whisper, write `.srt` | Append multilingual lines to existing cues via Gemini | Render an existing subtitle file into video | Apply text or image watermarks with `ffmpeg` | Install, status, update, and uninstall support |
+| Primary flow stays subtitle-first | Cue timing and indexes stay unchanged | Primary renderer uses `ffmpeg` subtitle filters when available | Position, opacity, size, and margin are explicit | Configured with `lilaccaps.toml` and `LILACCAPS_HOME` |
+| Output path is explicit | Translation output is explicit | Fallback renderer uses ImageMagick overlays when needed | Output path is explicit | OpenClaw skill bootstrap is supported |
 
 ## Features
 
 - Unified CLI under `lilaccaps`
-- `transcribe`, `translate`, and `burnin` kept as separate first-class workflows
+- `transcribe`, `translate`, `burnin`, and `watermark` kept as separate first-class workflows
 - Managed Whisper model download under the runtime home
 - Runtime health checks through `lilaccaps status`
 - Generated OpenClaw skill bootstrap
@@ -141,6 +143,20 @@ lilaccaps burnin ./input.mp4 --subs ./input.srt --font "PingFang SC" --size 42
 
 When the overlay fallback is used, `renderer_reason` shows why, for example
 `per_line_styles,line_spacing,colour`.
+
+Apply a watermark to a video:
+
+```bash
+lilaccaps watermark ./input.mp4 --text "lilac"
+lilaccaps watermark ./input.mp4 --text "lilac" --position top-right --opacity 0.35 --size 42
+lilaccaps watermark ./input.mp4 --image ./logo.png --position bottom-right --opacity 0.45 --size 180
+```
+
+`watermark` accepts exactly one of `--text` or `--image`. `--position` supports `top-left`,
+`top-right`, `bottom-left`, `bottom-right`, and `center`. For text watermarks, `--size` is the
+font size and `0` means the default size. For image watermarks, `--size` is the target image width
+and `0` keeps the original image width. `--margin` controls the edge offset. Text watermarks
+require the `ffmpeg` `drawtext` filter, and image watermarks require the `overlay` filter.
 
 Check environment health:
 

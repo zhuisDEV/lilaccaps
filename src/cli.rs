@@ -4,12 +4,13 @@ use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 
 use crate::commands;
+use crate::watermark::WatermarkPosition;
 
 #[derive(Debug, Parser)]
 #[command(
     name = "lilaccaps",
     version,
-    about = "Subtitle generation and burn-in CLI"
+    about = "Subtitle generation, burn-in, and watermark CLI"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -26,6 +27,7 @@ enum Command {
     Transcribe(TranscribeArgs),
     Translate(TranslateArgs),
     Burnin(BurninArgs),
+    Watermark(WatermarkArgs),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -95,6 +97,29 @@ pub struct BurninArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+pub struct WatermarkArgs {
+    pub video: PathBuf,
+    #[arg(long)]
+    pub output: Option<PathBuf>,
+    #[arg(long)]
+    pub text: Option<String>,
+    #[arg(long)]
+    pub image: Option<PathBuf>,
+    #[arg(long, value_enum, default_value_t = WatermarkPosition::BottomRight)]
+    pub position: WatermarkPosition,
+    #[arg(long, default_value_t = 0.4)]
+    pub opacity: f32,
+    #[arg(long, default_value_t = 0)]
+    pub size: u32,
+    #[arg(long, default_value_t = 24)]
+    pub margin: u32,
+    #[arg(long = "colour", visible_alias = "color", default_value = "white")]
+    pub colour: String,
+    #[arg(long)]
+    pub font: Option<String>,
+}
+
+#[derive(Debug, Clone, Args)]
 pub struct TranslateArgs {
     pub input: PathBuf,
     #[arg(long)]
@@ -119,5 +144,6 @@ pub fn run() -> Result<()> {
         Command::Transcribe(args) => commands::transcribe::run(args),
         Command::Translate(args) => commands::translate::run(args),
         Command::Burnin(args) => commands::burnin::run(args),
+        Command::Watermark(args) => commands::watermark::run(args),
     }
 }
