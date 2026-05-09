@@ -135,3 +135,5 @@ The next implementation should leave the repo with:
 - Removed the obsolete `transcribe-hang-report.md` scratch report after the v0.1.11 transcription hang fix was confirmed.
 - Removed the obsolete `lilacreport.md` scratch report after confirming the burn-in `--colour` override bug is already fixed by CLI colour precedence.
 - v0.1.12 audit updated `rustls-webpki` to clear RustSec advisories and added watermark ffmpeg filter preflight checks for `drawtext` and `overlay`.
+- Direct dependency update completed locally: `reqwest` from `0.12.x` to `0.13.3` using the renamed `rustls` feature, and `toml` from `0.9.x` to `1.1.2`; blocking HTTP, config parse/write, tests, clippy, and audit all validate with the updated lockfile.
+- v0.1.13 release packages the direct dependency update for `reqwest` `0.13.3` and `toml` `1.1.2`.
