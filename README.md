@@ -34,9 +34,15 @@ The command model stays explicit:
 - `transcribe`, `translate`, `burnin`, and `watermark` kept as separate first-class workflows
 - Managed Whisper model download under the runtime home
 - Runtime health checks through `lilaccaps status`
+- Repo-root `SKILL.md` quick start plus this README as the full manual
 - Generated OpenClaw skill bootstrap
 - Clean primary and fallback separation for rendering
 - `.env` support for translation API credentials
+
+## Quick Start and Manual
+
+- [SKILL.md](./SKILL.md) is the quick start for basic settings, common CLI usage, and where to find advanced options.
+- This README is the full manual for installation, command behavior, configuration, renderer choices, and troubleshooting.
 
 ## Requirements
 
@@ -181,6 +187,7 @@ Important values:
 - `translate.model`
 - `translate.append`
 - `translate.default_targets`
+- `translate.line_order`
 - `burnin.font`
 - `burnin.colour`
 - `burnin.size`
@@ -344,7 +351,9 @@ Supporting planning docs:
 This project is usable now for:
 
 - local transcription to `.srt`
+- subtitle translation with preserved cue timing
 - burn-in rendering from existing `.srt`
+- text and image watermark rendering
 - installation and environment health reporting
 
 The current implementation favors clean boundaries over broad convenience wrappers.

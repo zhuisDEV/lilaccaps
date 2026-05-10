@@ -139,3 +139,6 @@ The next implementation should leave the repo with:
 - Direct dependency update completed locally: `reqwest` from `0.12.x` to `0.13.3` using the renamed `rustls` feature, and `toml` from `0.9.x` to `1.1.2`; blocking HTTP, config parse/write, tests, clippy, and audit all validate with the updated lockfile.
 - v0.1.13 release packages the direct dependency update for `reqwest` `0.13.3` and `toml` `1.1.2`.
 - v0.1.14 release packages burn-in subtitle outlines, including default `[burnin.outline]` settings, CLI overrides, and renderer support for both ffmpeg/libass and ImageMagick overlay fallback.
+- Runtime docs were synchronized manually after v0.1.14: `/Users/lilac/.lilac/lilaccaps/README.md` and `SKILL.md` were added, and `/Users/lilac/.openclaw/skills/lilaccaps/SKILL.md` plus `README.md` were updated while keeping `agent.skill_path` pointed at the OpenClaw skill path.
+- Runtime docs were clarified by role: `SKILL.md` is now a quick-start guide for basic settings, basic CLI, and where to find advanced settings; `README.md` is the full manual, with matching copies in `/Users/lilac/.lilac/lilaccaps` and `/Users/lilac/.openclaw/skills/lilaccaps`.
+- v0.1.15 release adds repo-root `SKILL.md` as the quick start, keeps repo `README.md` as the full manual, and updates package metadata for the documentation release.
