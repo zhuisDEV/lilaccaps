@@ -94,6 +94,18 @@ pub struct BurninArgs {
     pub colour: Option<String>,
     #[arg(long)]
     pub size: Option<u32>,
+    #[arg(long, conflicts_with = "no_outline")]
+    pub outline: bool,
+    #[arg(long, conflicts_with = "outline")]
+    pub no_outline: bool,
+    #[arg(
+        long = "outline-colour",
+        visible_alias = "outline-color",
+        conflicts_with = "no_outline"
+    )]
+    pub outline_colour: Option<String>,
+    #[arg(long, conflicts_with = "no_outline")]
+    pub outline_width: Option<u32>,
 }
 
 #[derive(Debug, Clone, Args)]

@@ -135,6 +135,7 @@ Burn in an existing subtitle file:
 ```bash
 lilaccaps burnin ./input.mp4 --subs ./input.srt
 lilaccaps burnin ./input.mp4 --subs ./input.srt --font "PingFang SC" --size 42
+lilaccaps burnin ./input.mp4 --subs ./input.srt --outline-colour black --outline-width 3
 ```
 
 `lilaccaps burnin` reports the actual renderer it used:
@@ -142,7 +143,7 @@ lilaccaps burnin ./input.mp4 --subs ./input.srt --font "PingFang SC" --size 42
 - `renderer = overlay-fallback`
 
 When the overlay fallback is used, `renderer_reason` shows why, for example
-`per_line_styles,line_spacing,colour`.
+`per_line_styles,line_spacing,colour` or `outline_colour`.
 
 Apply a watermark to a video:
 
@@ -185,6 +186,9 @@ Important values:
 - `burnin.size`
 - `burnin.line_spacing`
 - `burnin.advanced_styling`
+- `burnin.outline.enabled`
+- `burnin.outline.colour`
+- `burnin.outline.width`
 
 `LILACCAPS_HOME` overrides the runtime home at runtime.
 
@@ -247,7 +251,7 @@ Set it to an ImageMagick colour string such as `"yellow"`, `"#ffd54f"`, or `"rgb
 to change subtitle fill colour, or pass `--colour` on the CLI for a single run. The CLI also
 accepts `--color` as an alias. Explicit colour values are applied through the overlay renderer
 so the configured fill colour is honored consistently. The overlay renderer preserves colour by
-rendering a fill-only text layer plus a separate black shadow layer for contrast.
+rendering outline, fill, and shadow as separate layers.
 
 `burnin.size` defaults to `0`, which means auto-size from the video height. Set a positive
 number in `lilaccaps.toml` or pass `--size` on the CLI to force a point size. CLI values
@@ -257,6 +261,14 @@ override TOML values for a single run.
 `lilaccaps.toml` to control the vertical gap between lines in multiline burn-in subtitles.
 This setting is applied by the ImageMagick overlay renderer; when you set it explicitly,
 `lilaccaps` prefers that renderer so the spacing value is honored.
+
+`burnin.outline.enabled` defaults to `true`, `burnin.outline.colour` defaults to `"black"`,
+and `burnin.outline.width` defaults to `2`. This draws a readable border around burn-in
+subtitle text for videos where the background changes from dark to light. Set `width = 0`
+or `enabled = false` to disable it, or pass `--no-outline` for a single run. You can also
+override one run with `--outline-colour black --outline-width 3`; `--outline-color` is an
+alias. The default black outline is compatible with the primary `ffmpeg` subtitle renderer;
+unusual outline colour strings may use the ImageMagick overlay fallback so the colour is honored.
 
 `burnin.advanced_styling` defaults to `true`. Set it to `false` to ignore configured custom
 colour, custom line spacing, and all `burnin.styles.<role>` per-line styling so `lilaccaps`
@@ -284,6 +296,11 @@ font = "auto"
 colour = "auto"
 size = 0
 line_spacing = 1
+
+[burnin.outline]
+enabled = true
+colour = "black"
+width = 2
 
 [burnin.styles.source]
 font = "auto"

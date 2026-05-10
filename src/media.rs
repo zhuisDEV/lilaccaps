@@ -57,7 +57,13 @@ pub fn extract_audio_to_wav(input: &Path, output: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn subtitles_filter(path: &Path, font: Option<&str>, size: Option<u32>) -> String {
+pub fn subtitles_filter(
+    path: &Path,
+    font: Option<&str>,
+    size: Option<u32>,
+    outline_colour: Option<&str>,
+    outline_width: Option<u32>,
+) -> String {
     let mut filter = format!("subtitles=filename='{}'", escape_subtitles_path(path));
     let mut style = Vec::new();
 
@@ -69,6 +75,15 @@ pub fn subtitles_filter(path: &Path, font: Option<&str>, size: Option<u32>) -> S
         style.push(format!("FontSize={size}"));
     }
 
+    if outline_width.is_some_and(|width| width > 0) {
+        style.push("BorderStyle=1".to_string());
+        style.push(format!("Outline={}", outline_width.unwrap_or_default()));
+
+        if let Some(colour) = outline_colour.and_then(ass_colour) {
+            style.push(format!("OutlineColour={colour}"));
+        }
+    }
+
     if !style.is_empty() {
         filter.push_str(":force_style='");
         filter.push_str(&style.join(","));
@@ -76,6 +91,82 @@ pub fn subtitles_filter(path: &Path, font: Option<&str>, size: Option<u32>) -> S
     }
 
     filter
+}
+
+pub fn ass_colour(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Some(hex) = trimmed.strip_prefix('#') {
+        return ass_colour_from_hex(hex);
+    }
+
+    if let Some(rgb) = ass_colour_from_rgb_function(trimmed) {
+        return Some(rgb);
+    }
+
+    let (red, green, blue) = match trimmed.to_ascii_lowercase().as_str() {
+        "black" => (0, 0, 0),
+        "white" => (255, 255, 255),
+        "yellow" => (255, 255, 0),
+        "red" => (255, 0, 0),
+        "green" => (0, 128, 0),
+        "lime" => (0, 255, 0),
+        "blue" => (0, 0, 255),
+        "cyan" | "aqua" => (0, 255, 255),
+        "magenta" | "fuchsia" => (255, 0, 255),
+        _ => return None,
+    };
+
+    Some(format_ass_colour(red, green, blue, 0))
+}
+
+fn ass_colour_from_hex(hex: &str) -> Option<String> {
+    let (red, green, blue, alpha) = match hex.len() {
+        6 => (
+            u8::from_str_radix(&hex[0..2], 16).ok()?,
+            u8::from_str_radix(&hex[2..4], 16).ok()?,
+            u8::from_str_radix(&hex[4..6], 16).ok()?,
+            0,
+        ),
+        8 => {
+            let css_alpha = u8::from_str_radix(&hex[6..8], 16).ok()?;
+            (
+                u8::from_str_radix(&hex[0..2], 16).ok()?,
+                u8::from_str_radix(&hex[2..4], 16).ok()?,
+                u8::from_str_radix(&hex[4..6], 16).ok()?,
+                255u8.saturating_sub(css_alpha),
+            )
+        }
+        _ => return None,
+    };
+
+    Some(format_ass_colour(red, green, blue, alpha))
+}
+
+fn ass_colour_from_rgb_function(value: &str) -> Option<String> {
+    let lower = value.to_ascii_lowercase();
+    let body = lower
+        .strip_prefix("rgb(")
+        .and_then(|value| value.strip_suffix(')'))?;
+    let channels = body
+        .split(',')
+        .map(str::trim)
+        .map(str::parse::<u8>)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+
+    if channels.len() != 3 {
+        return None;
+    }
+
+    Some(format_ass_colour(channels[0], channels[1], channels[2], 0))
+}
+
+fn format_ass_colour(red: u8, green: u8, blue: u8, alpha: u8) -> String {
+    format!("&H{alpha:02X}{blue:02X}{green:02X}{red:02X}")
 }
 
 fn escape_subtitles_path(path: &Path) -> String {
@@ -147,7 +238,7 @@ mod tests {
 
     #[test]
     fn escapes_subtitles_filter_path() {
-        let filter = subtitles_filter(Path::new("/tmp/a:b'[c].srt"), None, None);
+        let filter = subtitles_filter(Path::new("/tmp/a:b'[c].srt"), None, None, None, None);
         assert!(filter.contains("\\:"));
         assert!(filter.contains("\\'"));
         assert!(filter.contains("\\["));
@@ -156,9 +247,42 @@ mod tests {
 
     #[test]
     fn includes_force_style_when_font_or_size_is_set() {
-        let filter = subtitles_filter(Path::new("/tmp/input.srt"), Some("PingFang SC"), Some(42));
+        let filter = subtitles_filter(
+            Path::new("/tmp/input.srt"),
+            Some("PingFang SC"),
+            Some(42),
+            None,
+            None,
+        );
         assert!(filter.contains("force_style"));
         assert!(filter.contains("FontName=PingFang SC"));
         assert!(filter.contains("FontSize=42"));
+    }
+
+    #[test]
+    fn includes_outline_force_style_when_outline_is_set() {
+        let filter = subtitles_filter(
+            Path::new("/tmp/input.srt"),
+            None,
+            None,
+            Some("black"),
+            Some(2),
+        );
+        assert!(filter.contains("BorderStyle=1"));
+        assert!(filter.contains("Outline=2"));
+        assert!(filter.contains("OutlineColour=&H00000000"));
+    }
+
+    #[test]
+    fn converts_hex_and_rgb_colours_to_ass_bgr() {
+        assert_eq!(super::ass_colour("#ffd54f").as_deref(), Some("&H004FD5FF"));
+        assert_eq!(
+            super::ass_colour("rgb(255,220,120)").as_deref(),
+            Some("&H0078DCFF")
+        );
+        assert_eq!(
+            super::ass_colour("#00000080").as_deref(),
+            Some("&H7F000000")
+        );
     }
 }

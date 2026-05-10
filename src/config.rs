@@ -79,6 +79,8 @@ pub struct BurninConfig {
     #[serde(default = "default_burnin_advanced_styling")]
     pub advanced_styling: bool,
     #[serde(default)]
+    pub outline: BurninOutlineConfig,
+    #[serde(default)]
     pub styles: HashMap<String, BurninLineStyleConfig>,
 }
 
@@ -100,6 +102,16 @@ pub struct BurninLineStyleConfig {
     #[serde(alias = "color")]
     pub colour: Option<String>,
     pub size: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BurninOutlineConfig {
+    #[serde(default = "default_burnin_outline_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_burnin_outline_colour", alias = "color")]
+    pub colour: String,
+    #[serde(default = "default_burnin_outline_width")]
+    pub width: u32,
 }
 
 pub fn load_or_init_config(override_path: Option<PathBuf>) -> Result<LoadedConfig> {
@@ -183,6 +195,7 @@ pub fn default_config() -> Result<Config> {
             size: default_burnin_size(),
             line_spacing: default_burnin_line_spacing(),
             advanced_styling: default_burnin_advanced_styling(),
+            outline: BurninOutlineConfig::default(),
             styles: HashMap::new(),
         },
         translate: TranslateConfig::default(),
@@ -217,6 +230,18 @@ pub fn default_burnin_advanced_styling() -> bool {
     true
 }
 
+pub fn default_burnin_outline_enabled() -> bool {
+    true
+}
+
+pub fn default_burnin_outline_colour() -> String {
+    "black".to_string()
+}
+
+pub fn default_burnin_outline_width() -> u32 {
+    2
+}
+
 pub fn default_translate_model() -> String {
     "gemini-3.1-flash-lite-preview".to_string()
 }
@@ -233,7 +258,18 @@ impl Default for BurninConfig {
             size: default_burnin_size(),
             line_spacing: default_burnin_line_spacing(),
             advanced_styling: default_burnin_advanced_styling(),
+            outline: BurninOutlineConfig::default(),
             styles: HashMap::new(),
+        }
+    }
+}
+
+impl Default for BurninOutlineConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_burnin_outline_enabled(),
+            colour: default_burnin_outline_colour(),
+            width: default_burnin_outline_width(),
         }
     }
 }
@@ -306,6 +342,9 @@ mod tests {
         assert_eq!(config.burnin.size, 0);
         assert_eq!(config.burnin.line_spacing, 0);
         assert!(config.burnin.advanced_styling);
+        assert!(config.burnin.outline.enabled);
+        assert_eq!(config.burnin.outline.colour, "black");
+        assert_eq!(config.burnin.outline.width, 2);
         assert!(config.burnin.styles.is_empty());
         assert_eq!(config.translate.model, "gemini-3.1-flash-lite-preview");
         assert!(config.translate.append);
@@ -350,10 +389,23 @@ id = "base"
         assert_eq!(config.burnin.size, 0);
         assert_eq!(config.burnin.line_spacing, 0);
         assert!(config.burnin.advanced_styling);
+        assert!(config.burnin.outline.enabled);
+        assert_eq!(config.burnin.outline.colour, "black");
+        assert_eq!(config.burnin.outline.width, 2);
         assert!(config.burnin.styles.is_empty());
         assert_eq!(config.translate.model, "gemini-3.1-flash-lite-preview");
         assert!(config.translate.append);
         assert!(config.translate.default_targets.is_empty());
         assert!(config.translate.line_order.is_empty());
+    }
+
+    #[test]
+    fn default_config_renders_outline_section() {
+        let config = default_config().expect("default config should build");
+        let rendered = toml::to_string_pretty(&config).expect("default config should render");
+        assert!(rendered.contains("[burnin.outline]"));
+        assert!(rendered.contains("enabled = true"));
+        assert!(rendered.contains("colour = \"black\""));
+        assert!(rendered.contains("width = 2"));
     }
 }

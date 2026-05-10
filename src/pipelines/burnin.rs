@@ -5,8 +5,10 @@ use std::collections::HashMap;
 
 use anyhow::{Context, Result, bail};
 
-use crate::config::load_config;
-use crate::render::{BurninStyle, LineStyle, burn_in_subtitles};
+use crate::config::{
+    BurninLineStyleConfig, BurninOutlineConfig, default_burnin_outline_width, load_config,
+};
+use crate::render::{BurninStyle, LineStyle, OutlineStyle, burn_in_subtitles};
 
 #[derive(Debug, Clone)]
 pub struct BurninOutput {
@@ -17,20 +19,42 @@ pub struct BurninOutput {
     pub colour: String,
     pub size: u32,
     pub line_spacing: u32,
+    pub outline_enabled: bool,
+    pub outline_colour: String,
+    pub outline_width: u32,
     pub renderer: &'static str,
     pub renderer_reason: String,
     pub status: &'static str,
 }
 
-pub fn run(
-    video: PathBuf,
-    config_path: Option<PathBuf>,
-    subs: PathBuf,
-    output: Option<PathBuf>,
-    font: Option<String>,
-    colour: Option<String>,
-    size: Option<u32>,
-) -> Result<BurninOutput> {
+#[derive(Debug, Clone)]
+pub struct BurninRequest {
+    pub video: PathBuf,
+    pub config_path: Option<PathBuf>,
+    pub subs: PathBuf,
+    pub output: Option<PathBuf>,
+    pub font: Option<String>,
+    pub colour: Option<String>,
+    pub size: Option<u32>,
+    pub outline_enabled: Option<bool>,
+    pub outline_colour: Option<String>,
+    pub outline_width: Option<u32>,
+}
+
+pub fn run(request: BurninRequest) -> Result<BurninOutput> {
+    let BurninRequest {
+        video,
+        config_path,
+        subs,
+        output,
+        font,
+        colour,
+        size,
+        outline_enabled,
+        outline_colour,
+        outline_width,
+    } = request;
+
     if !video.exists() {
         bail!("video input does not exist: {}", video.display());
     }
@@ -46,10 +70,14 @@ pub fn run(
         &loaded.config.burnin.colour,
         loaded.config.burnin.size,
         loaded.config.burnin.line_spacing,
+        &loaded.config.burnin.outline,
         &loaded.config.burnin.styles,
         font,
         colour,
         size,
+        outline_enabled,
+        outline_colour,
+        outline_width,
     );
 
     let output = output.unwrap_or_else(|| default_output_path(&video));
@@ -72,6 +100,9 @@ pub fn run(
         colour: style.colour_label(),
         size: style.size.unwrap_or(0),
         line_spacing: style.line_spacing.unwrap_or(0),
+        outline_enabled: style.outline.is_active(),
+        outline_colour: style.outline.colour_label(),
+        outline_width: style.outline.active_width(),
         renderer: renderer.renderer,
         renderer_reason: if renderer.reasons.is_empty() {
             "none".to_string()
@@ -102,10 +133,14 @@ fn resolve_style(
     config_colour: &str,
     config_size: u32,
     config_line_spacing: u32,
-    config_styles: &HashMap<String, crate::config::BurninLineStyleConfig>,
+    config_outline: &BurninOutlineConfig,
+    config_styles: &HashMap<String, BurninLineStyleConfig>,
     cli_font: Option<String>,
     cli_colour: Option<String>,
     cli_size: Option<u32>,
+    cli_outline_enabled: Option<bool>,
+    cli_outline_colour: Option<String>,
+    cli_outline_width: Option<u32>,
 ) -> BurninStyle {
     let font = cli_font.or_else(|| normalize_font(config_font));
     let colour = cli_colour.or_else(|| {
@@ -150,12 +185,45 @@ fn resolve_style(
         colour,
         size,
         line_spacing,
+        outline: resolve_outline(
+            config_outline,
+            cli_outline_enabled,
+            cli_outline_colour,
+            cli_outline_width,
+        ),
         line_order: if config_advanced_styling {
             config_line_order.to_vec()
         } else {
             Vec::new()
         },
         line_styles,
+    }
+}
+
+fn resolve_outline(
+    config: &BurninOutlineConfig,
+    cli_enabled: Option<bool>,
+    cli_colour: Option<String>,
+    cli_width: Option<u32>,
+) -> OutlineStyle {
+    let mut width = cli_width.unwrap_or(config.width);
+    let cli_sets_outline = cli_colour.is_some() || cli_width.is_some_and(|value| value > 0);
+    let enabled = cli_enabled.unwrap_or(if cli_sets_outline {
+        true
+    } else {
+        config.enabled
+    });
+    if enabled && width == 0 && (cli_enabled == Some(true) || cli_sets_outline) {
+        width = default_burnin_outline_width();
+    }
+    let colour = cli_colour
+        .or_else(|| normalize_colour(&config.colour))
+        .or_else(|| enabled.then(|| "black".to_string()));
+
+    OutlineStyle {
+        enabled,
+        colour,
+        width,
     }
 }
 
@@ -182,7 +250,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::resolve_style;
-    use crate::config::BurninLineStyleConfig;
+    use crate::config::{BurninLineStyleConfig, BurninOutlineConfig};
 
     #[test]
     fn disabling_advanced_styling_clears_config_advanced_fields() {
@@ -193,6 +261,7 @@ mod tests {
             "#ffd54f",
             0,
             1,
+            &BurninOutlineConfig::default(),
             &HashMap::from([(
                 "source".to_string(),
                 BurninLineStyleConfig {
@@ -204,10 +273,14 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
+            None,
         );
 
         assert!(style.colour.is_none());
         assert!(style.line_spacing.is_none());
+        assert!(style.outline.is_active());
         assert!(style.line_order.is_empty());
         assert!(style.line_styles.is_empty());
     }
@@ -221,6 +294,7 @@ mod tests {
             "auto",
             0,
             1,
+            &BurninOutlineConfig::default(),
             &HashMap::from([(
                 "source".to_string(),
                 BurninLineStyleConfig {
@@ -232,11 +306,92 @@ mod tests {
             None,
             Some("#00ff00".to_string()),
             None,
+            None,
+            None,
+            None,
         );
 
         assert_eq!(style.colour.as_deref(), Some("#00ff00"));
         assert!(style.line_spacing.is_none());
+        assert!(style.outline.is_active());
         assert!(style.line_order.is_empty());
         assert!(style.line_styles.is_empty());
+    }
+
+    #[test]
+    fn cli_outline_options_override_config_for_one_run() {
+        let style = resolve_style(
+            &[],
+            true,
+            "auto",
+            "auto",
+            0,
+            0,
+            &BurninOutlineConfig {
+                enabled: false,
+                colour: "black".to_string(),
+                width: 2,
+            },
+            &HashMap::new(),
+            None,
+            None,
+            None,
+            None,
+            Some("#111111".to_string()),
+            Some(4),
+        );
+
+        assert!(style.outline.is_active());
+        assert_eq!(style.outline.colour.as_deref(), Some("#111111"));
+        assert_eq!(style.outline.width, 4);
+    }
+
+    #[test]
+    fn cli_no_outline_disables_default_outline() {
+        let style = resolve_style(
+            &[],
+            true,
+            "auto",
+            "auto",
+            0,
+            0,
+            &BurninOutlineConfig::default(),
+            &HashMap::new(),
+            None,
+            None,
+            None,
+            Some(false),
+            None,
+            None,
+        );
+
+        assert!(!style.outline.is_active());
+    }
+
+    #[test]
+    fn cli_outline_re_enables_zero_width_config_with_default_width() {
+        let style = resolve_style(
+            &[],
+            true,
+            "auto",
+            "auto",
+            0,
+            0,
+            &BurninOutlineConfig {
+                enabled: false,
+                colour: "black".to_string(),
+                width: 0,
+            },
+            &HashMap::new(),
+            None,
+            None,
+            None,
+            Some(true),
+            None,
+            None,
+        );
+
+        assert!(style.outline.is_active());
+        assert_eq!(style.outline.width, 2);
     }
 }

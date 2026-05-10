@@ -4,7 +4,9 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
-use crate::media::{ensure_ffmpeg_available, ffmpeg_supports_filter, subtitles_filter, video_size};
+use crate::media::{
+    ass_colour, ensure_ffmpeg_available, ffmpeg_supports_filter, subtitles_filter, video_size,
+};
 use crate::runtime::{MAGICK_DEPENDENCY, ensure_dependency, ensure_dir, tmp_dir};
 use crate::subtitles::{SubtitleCue, parse_srt_file};
 
@@ -41,8 +43,16 @@ pub struct BurninStyle {
     pub colour: Option<String>,
     pub size: Option<u32>,
     pub line_spacing: Option<u32>,
+    pub outline: OutlineStyle,
     pub line_order: Vec<String>,
     pub line_styles: HashMap<String, LineStyle>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct OutlineStyle {
+    pub enabled: bool,
+    pub colour: Option<String>,
+    pub width: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -65,7 +75,36 @@ impl BurninStyle {
     }
 
     fn uses_overlay_renderer(&self) -> bool {
-        self.has_line_overrides() || self.line_spacing.is_some() || self.colour.is_some()
+        self.has_line_overrides()
+            || self.line_spacing.is_some()
+            || self.colour.is_some()
+            || self.outline.requires_overlay_renderer()
+    }
+}
+
+impl OutlineStyle {
+    pub fn is_active(&self) -> bool {
+        self.enabled && self.width > 0
+    }
+
+    pub fn active_width(&self) -> u32 {
+        if self.is_active() { self.width } else { 0 }
+    }
+
+    pub fn colour_label(&self) -> String {
+        if self.is_active() {
+            self.colour.clone().unwrap_or_else(|| "black".to_string())
+        } else {
+            "none".to_string()
+        }
+    }
+
+    fn requires_overlay_renderer(&self) -> bool {
+        self.is_active()
+            && self
+                .colour
+                .as_deref()
+                .is_some_and(|colour| ass_colour(colour).is_none())
     }
 }
 
@@ -111,7 +150,13 @@ fn burn_in_with_subtitles_filter(
     output: &Path,
     style: &BurninStyle,
 ) -> Result<()> {
-    let filter = subtitles_filter(subs, style.font.as_deref(), style.size);
+    let filter = subtitles_filter(
+        subs,
+        style.font.as_deref(),
+        style.size,
+        style.outline.colour.as_deref(),
+        Some(style.outline.active_width()),
+    );
     let status = Command::new("ffmpeg")
         .arg("-hide_banner")
         .arg("-loglevel")
@@ -224,37 +269,19 @@ fn render_overlay_image(
             let vertical_padding = style
                 .line_spacing
                 .unwrap_or_else(|| multiline_line_padding(point_size));
-            command
-                .arg("(")
-                .arg("(")
-                .arg("-background")
-                .arg("none")
-                .arg("-font")
-                .arg(&font_path)
-                .arg("-fill")
-                .arg(fill_colour)
-                .arg("-pointsize")
-                .arg(point_size.to_string())
-                .arg(format!("label:{line}"))
-                .arg(")")
-                .arg("(")
-                .arg("+clone")
-                .arg("-background")
-                .arg("black")
-                .arg("-shadow")
-                .arg("100x1+0+0")
-                .arg(")")
-                .arg("+swap")
-                .arg("-background")
-                .arg("none")
-                .arg("-layers")
-                .arg("merge")
-                .arg("+repage")
-                .arg("-bordercolor")
-                .arg("none")
-                .arg("-border")
-                .arg(format!("0x{vertical_padding}"))
-                .arg(")");
+            append_text_with_shadow(
+                &mut command,
+                &font_path,
+                fill_colour,
+                point_size,
+                line,
+                style,
+            )
+            .arg("-bordercolor")
+            .arg("none")
+            .arg("-border")
+            .arg(format!("0x{vertical_padding}"))
+            .arg(")");
         }
 
         command
@@ -270,31 +297,15 @@ fn render_overlay_image(
             .map(|font| resolve_overlay_font(font, &cue.text))
             .unwrap_or_else(|| select_overlay_font(&cue.text).to_string());
         let fill_colour = style.colour.as_deref().unwrap_or("white");
-        command
-            .arg("(")
-            .arg("-background")
-            .arg("none")
-            .arg("-font")
-            .arg(&font_path)
-            .arg("-fill")
-            .arg(fill_colour)
-            .arg("-pointsize")
-            .arg(default_point_size.to_string())
-            .arg(format!("label:{}", cue.text))
-            .arg(")")
-            .arg("(")
-            .arg("+clone")
-            .arg("-background")
-            .arg("black")
-            .arg("-shadow")
-            .arg("100x1+0+0")
-            .arg(")")
-            .arg("+swap")
-            .arg("-background")
-            .arg("none")
-            .arg("-layers")
-            .arg("merge")
-            .arg("+repage");
+        append_text_with_shadow(
+            &mut command,
+            &font_path,
+            fill_colour,
+            default_point_size,
+            &cue.text,
+            style,
+        )
+        .arg(")");
     }
 
     Ok(command
@@ -310,6 +321,112 @@ fn render_overlay_image(
         .arg("0x40")
         .arg(image_target)
         .status()?)
+}
+
+fn append_text_with_shadow<'a>(
+    command: &'a mut Command,
+    font_path: &str,
+    fill_colour: &str,
+    point_size: u32,
+    text: &str,
+    style: &BurninStyle,
+) -> &'a mut Command {
+    command.arg("(");
+    append_text_label(
+        command,
+        font_path,
+        fill_colour,
+        point_size,
+        text,
+        &style.outline,
+    );
+    command
+        .arg("(")
+        .arg("+clone")
+        .arg("-background")
+        .arg("black")
+        .arg("-shadow")
+        .arg("100x1+0+0")
+        .arg(")")
+        .arg("+swap")
+        .arg("-background")
+        .arg("none")
+        .arg("-layers")
+        .arg("merge")
+        .arg("+repage")
+}
+
+fn append_text_label(
+    command: &mut Command,
+    font_path: &str,
+    fill_colour: &str,
+    point_size: u32,
+    text: &str,
+    outline: &OutlineStyle,
+) {
+    if outline.is_active() {
+        command.arg("(");
+        append_label_layer(
+            command,
+            font_path,
+            "none",
+            outline.colour.as_deref().unwrap_or("black"),
+            Some(outline.width),
+            point_size,
+            text,
+        );
+        command.arg(")");
+    }
+
+    command.arg("(");
+    append_label_layer(
+        command,
+        font_path,
+        fill_colour,
+        "none",
+        None,
+        point_size,
+        text,
+    );
+    command.arg(")");
+
+    if outline.is_active() {
+        command
+            .arg("-background")
+            .arg("none")
+            .arg("-layers")
+            .arg("merge")
+            .arg("+repage");
+    }
+}
+
+fn append_label_layer(
+    command: &mut Command,
+    font_path: &str,
+    fill_colour: &str,
+    stroke_colour: &str,
+    stroke_width: Option<u32>,
+    point_size: u32,
+    text: &str,
+) {
+    command
+        .arg("-background")
+        .arg("none")
+        .arg("-font")
+        .arg(font_path)
+        .arg("-fill")
+        .arg(fill_colour)
+        .arg("-stroke")
+        .arg(stroke_colour);
+
+    if let Some(stroke_width) = stroke_width {
+        command.arg("-strokewidth").arg(stroke_width.to_string());
+    }
+
+    command
+        .arg("-pointsize")
+        .arg(point_size.to_string())
+        .arg(format!("label:{text}"));
 }
 
 fn burn_in_with_overlay_images(
@@ -404,6 +521,10 @@ fn overlay_renderer_reasons(style: &BurninStyle) -> Vec<&'static str> {
         reasons.push("colour");
     }
 
+    if style.outline.requires_overlay_renderer() {
+        reasons.push("outline_colour");
+    }
+
     reasons
 }
 
@@ -488,7 +609,7 @@ fn is_cjk_or_korean_or_japanese(ch: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        BurninStyle, LineStyle, is_cjk_or_korean_or_japanese, line_style_for_index,
+        BurninStyle, LineStyle, OutlineStyle, is_cjk_or_korean_or_japanese, line_style_for_index,
         multiline_line_padding, named_font_candidates, overlay_renderer_reasons,
         select_overlay_font,
     };
@@ -524,6 +645,7 @@ mod tests {
             colour: None,
             size: None,
             line_spacing: None,
+            outline: OutlineStyle::default(),
             line_order: vec!["source".to_string(), "en".to_string()],
             line_styles,
         };
@@ -553,6 +675,7 @@ mod tests {
             colour: None,
             size: None,
             line_spacing: Some(3),
+            outline: OutlineStyle::default(),
             line_order: Vec::new(),
             line_styles: HashMap::new(),
         };
@@ -567,6 +690,7 @@ mod tests {
             colour: Some("#ffd54f".to_string()),
             size: None,
             line_spacing: None,
+            outline: OutlineStyle::default(),
             line_order: Vec::new(),
             line_styles: HashMap::new(),
         };
@@ -581,11 +705,52 @@ mod tests {
             colour: Some("#ffd54f".to_string()),
             size: None,
             line_spacing: Some(1),
+            outline: OutlineStyle::default(),
             line_order: vec!["source".to_string()],
             line_styles: HashMap::from([("source".to_string(), LineStyle::default())]),
         };
 
         let reasons = overlay_renderer_reasons(&style);
         assert_eq!(reasons, vec!["per_line_styles", "line_spacing", "colour"]);
+    }
+
+    #[test]
+    fn ass_supported_outline_stays_on_primary_renderer() {
+        let style = BurninStyle {
+            font: None,
+            colour: None,
+            size: None,
+            line_spacing: None,
+            outline: OutlineStyle {
+                enabled: true,
+                colour: Some("black".to_string()),
+                width: 2,
+            },
+            line_order: Vec::new(),
+            line_styles: HashMap::new(),
+        };
+
+        assert!(!style.uses_overlay_renderer());
+        assert!(overlay_renderer_reasons(&style).is_empty());
+    }
+
+    #[test]
+    fn ass_unsupported_outline_colour_forces_overlay_renderer() {
+        let style = BurninStyle {
+            font: None,
+            colour: None,
+            size: None,
+            line_spacing: None,
+            outline: OutlineStyle {
+                enabled: true,
+                colour: Some("rgba(0,0,0,0.5)".to_string()),
+                width: 2,
+            },
+            line_order: Vec::new(),
+            line_styles: HashMap::new(),
+        };
+
+        assert!(style.uses_overlay_renderer());
+        assert_eq!(overlay_renderer_reasons(&style), vec!["outline_colour"]);
     }
 }

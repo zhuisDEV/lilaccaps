@@ -119,8 +119,9 @@ The next implementation should leave the repo with:
 - `burnin.advanced_styling` is the top-level switch for advanced multiline styling; when it is `false`, configured custom colour, line spacing, and `burnin.styles.<role>` are ignored so ffmpeg/libass can stay on the primary path when available, but explicit CLI `--colour` still overrides config for a single run.
 - `burnin.line_spacing` is now a TOML-only renderer setting; `0` means auto spacing, and a positive value forces the overlay renderer so multiline spacing can be honored consistently.
 - Burn-in colour now supports a global `burnin.colour` default plus per-line `burnin.styles.<role>.colour`; explicit colour values force the overlay renderer so custom fill colour is applied consistently.
+- Burn-in subtitles now have configurable outline defaults under `[burnin.outline]`: `enabled = true`, `colour = "black"`, and `width = 2`; CLI overrides are `--outline`, `--no-outline`, `--outline-colour`/`--outline-color`, and `--outline-width`.
 - `lilaccaps burnin` should print the actual `renderer` and `renderer_reason` to make fallback selection visible to the user.
-- In the ImageMagick fallback, `label:` plus `-stroke` can discard the fill colour entirely; preserve configured colours by rendering a fill-only text layer and adding contrast with a separate black shadow layer instead of stroke-based outlines.
+- In the ImageMagick fallback, do not combine `label:` fill and stroke in the same layer; preserve configured fill colour by rendering the outline as its own stroke-only layer, the fill as a separate fill-only layer, and the shadow behind the merged text.
 - Translation is a separate workflow: `translate` rewrites cue text but preserves cue timing and indexes exactly, so `burnin` can stay render-only.
 - Translation defaults now live under `[translate]` in `lilaccaps.toml`, and Gemini API credentials are loaded from `GEMINI_API_KEY` in the environment or from `$LILACCAPS_HOME/.env`.
 - Multilingual captions are represented as multi-line cue text, with `translate --append` adding one translated line per target language under the original subtitle text.
