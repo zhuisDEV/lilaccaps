@@ -45,7 +45,7 @@ pub const CMAKE_DEPENDENCY: CommandDependency = CommandDependency {
 
 pub const MAGICK_DEPENDENCY: CommandDependency = CommandDependency {
     name: "magick",
-    purpose: "render fallback subtitle overlays when ffmpeg lacks the subtitles filter",
+    purpose: "render fallback subtitle overlays, text watermarks, and converted image watermarks",
     install_hint: "On macOS with Homebrew: brew install imagemagick",
     brew_package: Some("imagemagick"),
 };

@@ -16,6 +16,8 @@ pub struct WatermarkOutput {
     pub opacity: f32,
     pub size: u32,
     pub margin: u32,
+    pub renderer: &'static str,
+    pub renderer_reason: String,
     pub status: &'static str,
 }
 
@@ -31,6 +33,8 @@ pub fn run(
     margin: u32,
     colour: String,
     font: Option<String>,
+    outline_colour: String,
+    outline_width: u32,
 ) -> Result<WatermarkOutput> {
     if !video.exists() {
         bail!("video input does not exist: {}", video.display());
@@ -67,8 +71,10 @@ pub fn run(
         margin,
         colour,
         font,
+        outline_colour,
+        outline_width,
     };
-    apply_watermark(&video, &output, &source, &style)?;
+    let renderer = apply_watermark(&video, &output, &source, &style)?;
 
     Ok(WatermarkOutput {
         video,
@@ -78,6 +84,12 @@ pub fn run(
         opacity,
         size,
         margin,
+        renderer: renderer.renderer,
+        renderer_reason: if renderer.reasons.is_empty() {
+            "none".to_string()
+        } else {
+            renderer.reasons.join(",")
+        },
         status: "rendered",
     })
 }

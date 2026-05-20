@@ -129,6 +129,14 @@ pub struct WatermarkArgs {
     pub colour: String,
     #[arg(long)]
     pub font: Option<String>,
+    #[arg(
+        long = "outline-colour",
+        visible_alias = "outline-color",
+        default_value = "black"
+    )]
+    pub outline_colour: String,
+    #[arg(long, default_value_t = 0)]
+    pub outline_width: u32,
 }
 
 #[derive(Debug, Clone, Args)]

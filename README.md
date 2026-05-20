@@ -24,7 +24,7 @@ The command model stays explicit:
 
 | Transcribe | Translate | Burn-in | Watermark | Lifecycle |
 | --- | --- | --- | --- | --- |
-| Extract audio with `ffmpeg`, transcribe with Whisper, write `.srt` | Append multilingual lines to existing cues via Gemini | Render an existing subtitle file into video | Apply text or image watermarks with `ffmpeg` | Install, status, update, and uninstall support |
+| Extract audio with `ffmpeg`, transcribe with Whisper, write `.srt` | Append multilingual lines to existing cues via Gemini | Render an existing subtitle file into video | Apply text or image watermarks with ffmpeg plus ImageMagick fallback | Install, status, update, and uninstall support |
 | Primary flow stays subtitle-first | Cue timing and indexes stay unchanged | Primary renderer uses `ffmpeg` subtitle filters when available | Position, opacity, size, and margin are explicit | Configured with `lilaccaps.toml` and `LILACCAPS_HOME` |
 | Output path is explicit | Translation output is explicit | Fallback renderer uses ImageMagick overlays when needed | Output path is explicit | OpenClaw skill bootstrap is supported |
 
@@ -156,14 +156,21 @@ Apply a watermark to a video:
 ```bash
 lilaccaps watermark ./input.mp4 --text "lilac"
 lilaccaps watermark ./input.mp4 --text "lilac" --position top-right --opacity 0.35 --size 42
+lilaccaps watermark ./input.mp4 --text "Lilac Captions" --font Verdana --colour "#E19CFF" --outline-width 2
 lilaccaps watermark ./input.mp4 --image ./logo.png --position bottom-right --opacity 0.45 --size 180
+lilaccaps watermark ./input.mp4 --image ./logo.svg --position top-left --opacity 0.45
 ```
 
 `watermark` accepts exactly one of `--text` or `--image`. `--position` supports `top-left`,
 `top-right`, `bottom-left`, `bottom-right`, and `center`. For text watermarks, `--size` is the
 font size and `0` means the default size. For image watermarks, `--size` is the target image width
-and `0` keeps the original image width. `--margin` controls the edge offset. Text watermarks
-require the `ffmpeg` `drawtext` filter, and image watermarks require the `overlay` filter.
+and `0` keeps the original image width. `--margin` controls the edge offset. Text watermarks use
+the `ffmpeg` `drawtext` filter when available, and automatically fall back to rendering the text as
+a PNG with ImageMagick before applying the existing image overlay path when `drawtext` is missing
+or fails. SVG image watermarks are also converted to PNG with ImageMagick before overlaying when
+needed. `--outline-width` and `--outline-colour`/`--outline-color` add a text watermark outline.
+Common font names such as `Arial`, `Verdana`, `Helvetica`, and `PingFang SC` are resolved to font
+files for the ImageMagick fallback.
 
 Check environment health:
 

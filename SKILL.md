@@ -66,8 +66,13 @@ Add a watermark:
 
 ```bash
 lilaccaps watermark ./input.mp4 --text "lilac"
+lilaccaps watermark ./input.mp4 --text "Lilac Captions" --font Verdana --colour "#E19CFF" --outline-width 2
 lilaccaps watermark ./input.mp4 --image ./logo.png --opacity 0.45 --size 180
 ```
+
+Text watermarks use ffmpeg `drawtext` when available. If `drawtext` is missing or fails, lilaccaps
+renders the text to PNG with ImageMagick and applies it through image overlay. SVG image watermarks
+are converted to PNG before overlaying.
 
 Get CLI details:
 
@@ -130,4 +135,3 @@ When using `lilaccaps`:
 3. Use the explicit command for the task.
 4. Prefer explicit `--output` paths for important outputs.
 5. Report generated file paths and burn-in renderer choice.
-

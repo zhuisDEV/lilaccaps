@@ -15,6 +15,8 @@ pub fn run(args: WatermarkArgs) -> Result<()> {
         args.margin,
         args.colour,
         args.font,
+        args.outline_colour,
+        args.outline_width,
     )?;
     println!("command = watermark");
     println!("video = {}", output.video.display());
@@ -24,6 +26,8 @@ pub fn run(args: WatermarkArgs) -> Result<()> {
     println!("opacity = {:.2}", output.opacity);
     println!("size = {}", output.size);
     println!("margin = {}", output.margin);
+    println!("renderer = {}", output.renderer);
+    println!("renderer_reason = {}", output.renderer_reason);
     println!("status = {}", output.status);
     Ok(())
 }
