@@ -64,7 +64,31 @@ brew install ffmpeg-full cmake imagemagick
 
 ## Install
 
-Build locally and install with cargo:
+Recommended: install globally from the GitHub repo with the remote installer:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zhuisDEV/lilaccaps/main/install.sh | sh
+```
+
+The remote installer is the recommended install path. It installs the `lilaccaps` binary with
+Cargo and then runs `lilaccaps install` to initialize the runtime config, model directory, and
+skill bootstrap files.
+
+To let the installer use Homebrew for mapped missing prerequisites on macOS, pass `--fix`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zhuisDEV/lilaccaps/main/install.sh | sh -s -- --fix
+```
+
+If you prefer not to pipe a remote script into `sh`, run the same primary install directly:
+
+```bash
+brew install ffmpeg-full cmake imagemagick
+cargo install --git https://github.com/zhuisDEV/lilaccaps.git --locked --force lilaccaps
+lilaccaps install
+```
+
+For local development, build from a checkout and install with cargo:
 
 ```bash
 brew install ffmpeg-full cmake imagemagick

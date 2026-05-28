@@ -39,6 +39,21 @@ lilaccaps doctor
 
 Healthy status should include `healthy = true`, `config_valid = true`, `model_ready = true`, and `missing = none`.
 
+## Install
+
+Recommended: install globally from GitHub with the remote installer:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zhuisDEV/lilaccaps/main/install.sh | sh
+```
+
+If you do not want to pipe a remote script into `sh`, use Cargo directly:
+
+```bash
+cargo install --git https://github.com/zhuisDEV/lilaccaps.git --locked --force lilaccaps
+lilaccaps install
+```
+
 ## Basic CLI
 
 Transcribe media to subtitles:

@@ -22,5 +22,8 @@ jobs:
       - name: Format check
         run: cargo fmt --check
 
+      - name: Installer syntax check
+        run: sh -n install.sh
+
       - name: Test
         run: cargo test
