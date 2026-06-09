@@ -115,6 +115,17 @@ pub struct LineStyle {
     pub size: Option<u32>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct TextLayerSpec<'a> {
+    font_path: &'a str,
+    fill_colour: &'a str,
+    stroke_colour: &'a str,
+    stroke_width: Option<u32>,
+    point_size: u32,
+    text: &'a str,
+    wrap_width: u32,
+}
+
 pub fn burn_in_subtitles(
     runtime_home: &Path,
     video: &Path,
@@ -250,6 +261,7 @@ fn render_overlay_image(
     let lines = cue.text.lines().collect::<Vec<_>>();
     let mut command = Command::new("magick");
     let default_point_size = style.size.unwrap_or_else(|| point_size_for_height(height));
+    let wrap_width = subtitle_wrap_width(width);
 
     if style.has_line_overrides() && lines.len() > 1 {
         for (index, line) in lines.iter().enumerate() {
@@ -275,6 +287,7 @@ fn render_overlay_image(
                 fill_colour,
                 point_size,
                 line,
+                wrap_width,
                 style,
             )
             .arg("-bordercolor")
@@ -303,6 +316,7 @@ fn render_overlay_image(
             fill_colour,
             default_point_size,
             &cue.text,
+            wrap_width,
             style,
         )
         .arg(")");
@@ -329,6 +343,7 @@ fn append_text_with_shadow<'a>(
     fill_colour: &str,
     point_size: u32,
     text: &str,
+    wrap_width: u32,
     style: &BurninStyle,
 ) -> &'a mut Command {
     command.arg("(");
@@ -338,6 +353,7 @@ fn append_text_with_shadow<'a>(
         fill_colour,
         point_size,
         text,
+        wrap_width,
         &style.outline,
     );
     command
@@ -362,18 +378,22 @@ fn append_text_label(
     fill_colour: &str,
     point_size: u32,
     text: &str,
+    wrap_width: u32,
     outline: &OutlineStyle,
 ) {
     if outline.is_active() {
         command.arg("(");
         append_label_layer(
             command,
-            font_path,
-            "none",
-            outline.colour.as_deref().unwrap_or("black"),
-            Some(outline.width),
-            point_size,
-            text,
+            TextLayerSpec {
+                font_path,
+                fill_colour: "none",
+                stroke_colour: outline.colour.as_deref().unwrap_or("black"),
+                stroke_width: Some(outline.width),
+                point_size,
+                text,
+                wrap_width,
+            },
         );
         command.arg(")");
     }
@@ -381,12 +401,15 @@ fn append_text_label(
     command.arg("(");
     append_label_layer(
         command,
-        font_path,
-        fill_colour,
-        "none",
-        None,
-        point_size,
-        text,
+        TextLayerSpec {
+            font_path,
+            fill_colour,
+            stroke_colour: "none",
+            stroke_width: None,
+            point_size,
+            text,
+            wrap_width,
+        },
     );
     command.arg(")");
 
@@ -400,33 +423,37 @@ fn append_text_label(
     }
 }
 
-fn append_label_layer(
-    command: &mut Command,
-    font_path: &str,
-    fill_colour: &str,
-    stroke_colour: &str,
-    stroke_width: Option<u32>,
-    point_size: u32,
-    text: &str,
-) {
-    command
-        .arg("-background")
-        .arg("none")
-        .arg("-font")
-        .arg(font_path)
-        .arg("-fill")
-        .arg(fill_colour)
-        .arg("-stroke")
-        .arg(stroke_colour);
+fn append_label_layer(command: &mut Command, spec: TextLayerSpec<'_>) {
+    for arg in label_layer_args(spec) {
+        command.arg(arg);
+    }
+}
 
-    if let Some(stroke_width) = stroke_width {
-        command.arg("-strokewidth").arg(stroke_width.to_string());
+fn label_layer_args(spec: TextLayerSpec<'_>) -> Vec<String> {
+    let mut args = vec![
+        "-background".to_string(),
+        "none".to_string(),
+        "-font".to_string(),
+        spec.font_path.to_string(),
+        "-fill".to_string(),
+        spec.fill_colour.to_string(),
+        "-stroke".to_string(),
+        spec.stroke_colour.to_string(),
+    ];
+
+    if let Some(stroke_width) = spec.stroke_width {
+        args.push("-strokewidth".to_string());
+        args.push(stroke_width.to_string());
     }
 
-    command
-        .arg("-pointsize")
-        .arg(point_size.to_string())
-        .arg(format!("label:{text}"));
+    args.extend([
+        "-pointsize".to_string(),
+        spec.point_size.to_string(),
+        "-size".to_string(),
+        format!("{}x", spec.wrap_width),
+        format!("caption:{}", spec.text),
+    ]);
+    args
 }
 
 fn burn_in_with_overlay_images(
@@ -500,6 +527,10 @@ fn burn_in_with_overlay_images(
 fn point_size_for_height(height: u32) -> u32 {
     let candidate = height / 17;
     candidate.max(28)
+}
+
+fn subtitle_wrap_width(width: u32) -> u32 {
+    (width.saturating_mul(9) / 10).max(1)
 }
 
 fn multiline_line_padding(point_size: u32) -> u32 {
@@ -609,9 +640,9 @@ fn is_cjk_or_korean_or_japanese(ch: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        BurninStyle, LineStyle, OutlineStyle, is_cjk_or_korean_or_japanese, line_style_for_index,
-        multiline_line_padding, named_font_candidates, overlay_renderer_reasons,
-        select_overlay_font,
+        BurninStyle, LineStyle, OutlineStyle, TextLayerSpec, is_cjk_or_korean_or_japanese,
+        label_layer_args, line_style_for_index, multiline_line_padding, named_font_candidates,
+        overlay_renderer_reasons, select_overlay_font, subtitle_wrap_width,
     };
     use std::collections::HashMap;
 
@@ -666,6 +697,33 @@ mod tests {
         assert_eq!(multiline_line_padding(30), 1);
         assert_eq!(multiline_line_padding(42), 1);
         assert_eq!(multiline_line_padding(60), 2);
+    }
+
+    #[test]
+    fn overlay_caption_width_leaves_horizontal_margin() {
+        assert_eq!(subtitle_wrap_width(1920), 1728);
+        assert_eq!(subtitle_wrap_width(1280), 1152);
+        assert_eq!(subtitle_wrap_width(0), 1);
+    }
+
+    #[test]
+    fn overlay_text_layers_use_bounded_caption_images() {
+        let args = label_layer_args(TextLayerSpec {
+            font_path: "/Library/Fonts/Arial.ttf",
+            fill_colour: "white",
+            stroke_colour: "black",
+            stroke_width: Some(2),
+            point_size: 42,
+            text: "This is a long subtitle line",
+            wrap_width: 1152,
+        });
+
+        assert!(args.windows(2).any(|items| items == ["-size", "1152x"]));
+        assert!(
+            args.iter()
+                .any(|arg| arg == "caption:This is a long subtitle line")
+        );
+        assert!(!args.iter().any(|arg| arg.starts_with("label:")));
     }
 
     #[test]

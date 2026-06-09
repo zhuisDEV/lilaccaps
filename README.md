@@ -300,6 +300,11 @@ override TOML values for a single run.
 This setting is applied by the ImageMagick overlay renderer; when you set it explicitly,
 `lilaccaps` prefers that renderer so the spacing value is honored.
 
+The ImageMagick overlay renderer wraps long subtitle lines to a safe width inside the
+video frame before centering them. Explicit line breaks already present in the `.srt`
+are preserved, and long single lines are wrapped so the beginning and end do not run
+outside the visible video area.
+
 `burnin.outline.enabled` defaults to `true`, `burnin.outline.colour` defaults to `"black"`,
 and `burnin.outline.width` defaults to `2`. This draws a readable border around burn-in
 subtitle text for videos where the background changes from dark to light. Set `width = 0`

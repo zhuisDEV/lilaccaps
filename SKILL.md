@@ -99,6 +99,9 @@ lilaccaps burnin --help
 lilaccaps watermark --help
 ```
 
+Burn-in preserves explicit `.srt` line breaks. When advanced styling uses the ImageMagick
+overlay renderer, long subtitle lines are wrapped inside the video frame before rendering.
+
 ## Basic Settings
 
 Edit `~/.lilac/lilaccaps/lilaccaps.toml`.
