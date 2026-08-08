@@ -24,7 +24,7 @@ jobs:
 
       - name: Install system dependencies
         run: |
-          brew install ffmpeg-full cmake imagemagick shellcheck actionlint gitleaks
+          brew install ffmpeg-full cmake imagemagick shellcheck actionlint gitleaks cargo-audit
           if brew list --versions ffmpeg >/dev/null 2>&1; then
             brew unlink ffmpeg
           fi
@@ -51,4 +51,4 @@ jobs:
         run: cargo test --all-targets --all-features --locked
 
       - name: Security audit
-        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+        run: cargo audit
