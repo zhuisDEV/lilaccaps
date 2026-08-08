@@ -5,16 +5,18 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use crate::config::{AgentConfig, Config, ConfigPaths, expand_home};
-use crate::runtime::ensure_dir;
+use crate::runtime::atomic_write;
 
 const GENERATED_SKILL_MARKER: &str = "<!-- generated-by-lilaccaps -->";
 
 pub fn default_skill_path() -> Result<PathBuf> {
     if let Ok(openclaw_home) = env::var("OPENCLAW_HOME") {
-        return Ok(PathBuf::from(openclaw_home)
-            .join("skills")
-            .join("lilaccaps")
-            .join("SKILL.md"));
+        return expand_home(
+            &PathBuf::from(openclaw_home)
+                .join("skills")
+                .join("lilaccaps")
+                .join("SKILL.md"),
+        );
     }
 
     expand_home(std::path::Path::new(
@@ -59,7 +61,8 @@ pub fn write_bootstrap_markdown(paths: &ConfigPaths, config: &Config) -> Result<
 ## Install guidance\n\
 - macOS with Homebrew: `brew install ffmpeg-full cmake imagemagick`\n\
 - if you keep a plain `ffmpeg` build, transcription still works and burn-in falls back to ImageMagick when the `subtitles` or `ass` filters are missing\n\
-- after the binary is installed, `lilaccaps doctor --fix` can install the minimum mapped Homebrew packages automatically\n\
+- after the binary is installed, `lilaccaps doctor --fix` can install or repair unhealthy mapped Homebrew packages automatically\n\
+- `lilaccaps update` refreshes `ffmpeg-full`, `cmake`, and `imagemagick` before updating the CLI; use `--skip-dependencies` when those packages are managed separately\n\
 - confirm tool availability before use:\n\
   - `cargo --version`\n\
   - `ffmpeg -version`\n\
@@ -72,7 +75,8 @@ pub fn write_bootstrap_markdown(paths: &ConfigPaths, config: &Config) -> Result<
 - config is stored in `lilaccaps.toml`\n\n\
 ## API credentials\n\
 - create a local `.env` file under the runtime home or export `GEMINI_API_KEY`\n\
-- `lilaccaps translate` loads `GEMINI_API_KEY` from the environment or `$LILACCAPS_HOME/.env`\n\
+- an exported `GEMINI_API_KEY` takes precedence over `$LILACCAPS_HOME/.env`\n\
+- the default translation model is `gemini-3.1-flash-lite`\n\
 \n\
 ## OpenClaw setup\n\
 1. Confirm `LILACCAPS_HOME` if you need a non-default runtime directory.\n\
@@ -127,7 +131,7 @@ pub fn write_bootstrap_markdown(paths: &ConfigPaths, config: &Config) -> Result<
         paths.runtime_home.display()
     );
 
-    fs::write(&bootstrap_path, content).with_context(|| {
+    atomic_write(&bootstrap_path, content).with_context(|| {
         format!(
             "failed to write bootstrap instructions to {}",
             bootstrap_path.display()
@@ -140,18 +144,18 @@ pub fn write_bootstrap_markdown(paths: &ConfigPaths, config: &Config) -> Result<
 pub fn ensure_skill_file(config: &Config) -> Result<PathBuf> {
     let skill_path = &config.agent.skill_path;
     if skill_path.exists() {
-        return Ok(skill_path.clone());
-    }
-
-    if let Some(parent) = skill_path.parent() {
-        ensure_dir(parent)?;
+        let raw = fs::read_to_string(skill_path)
+            .with_context(|| format!("failed to inspect skill file {}", skill_path.display()))?;
+        if !raw.contains(GENERATED_SKILL_MARKER) {
+            return Ok(skill_path.clone());
+        }
     }
 
     let content = format!(
         "{GENERATED_SKILL_MARKER}\n# lilaccaps\n\nUse the `lilaccaps` CLI for transcription, subtitle rendering, and video watermarks.\n\n## Commands\n- `lilaccaps doctor`\n- `lilaccaps status`\n- `lilaccaps transcribe <input>`\n- `lilaccaps transcribe <input> --lang <code>`\n- `lilaccaps translate <input.srt> --to en --to ja --append`\n- `lilaccaps burnin <video> --subs <subtitle-file>`\n- `lilaccaps burnin <video> --subs <subtitle-file> --colour \"#ffd54f\" --size 42`\n- `lilaccaps burnin <video> --subs <subtitle-file> --outline-colour black --outline-width 3`\n- `lilaccaps watermark <video> --text \"lilac\"`\n- `lilaccaps watermark <video> --image <logo.png> --opacity 0.45 --size 180`\n\n## Notes\n- `burnin` is render-only.\n- `watermark` is render-only and accepts exactly one of `--text` or `--image`.\n- transcription is a separate workflow.\n- `translate` can append one or more target-language lines to each cue for multilingual subtitles.\n- `transcribe.language = \"auto\"` samples the first 30 seconds for language detection and then transcribes with that detected language explicitly.\n- `burnin.font = \"auto\"` lets the renderer choose a suitable font, `burnin.colour = \"auto\"` keeps the renderer default colour, `burnin.size = 0` auto-scales captions from video height, and `burnin.outline` defaults to a black 2px border.\n- watermark `--position` supports `top-left`, `top-right`, `bottom-left`, `bottom-right`, and `center`.\n- runtime home is configured via `lilaccaps.toml` and `LILACCAPS_HOME`.\n"
     );
 
-    fs::write(skill_path, content)
+    atomic_write(skill_path, content)
         .with_context(|| format!("failed to write skill file {}", skill_path.display()))?;
 
     Ok(skill_path.clone())

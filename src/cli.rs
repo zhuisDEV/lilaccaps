@@ -50,6 +50,8 @@ pub struct InstallArgs {
 pub struct UpdateArgs {
     #[arg(long)]
     pub config_path: Option<PathBuf>,
+    #[arg(long, help = "Skip managed system dependency updates")]
+    pub skip_dependencies: bool,
 }
 
 #[derive(Debug, Clone, Args)]

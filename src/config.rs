@@ -7,11 +7,13 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::integration::default_skill_path;
-use crate::release::infer_github_repo;
-use crate::runtime::ensure_dir;
+use crate::release::{default_github_repo, infer_github_repo};
+use crate::runtime::atomic_write;
 
 const DEFAULT_RUNTIME_HOME: &str = "~/.lilac/lilaccaps";
 const CONFIG_FILE_NAME: &str = "lilaccaps.toml";
+const LEGACY_TRANSLATE_MODEL: &str = "gemini-3.1-flash-lite-preview";
+const DEFAULT_TRANSLATE_MODEL: &str = "gemini-3.1-flash-lite";
 
 #[derive(Debug, Clone)]
 pub struct ConfigPaths {
@@ -127,10 +129,11 @@ pub fn load_or_init_config(override_path: Option<PathBuf>) -> Result<LoadedConfi
         .with_context(|| format!("failed to read config file {}", config_path.display()))?;
     let mut config: Config = toml::from_str(&raw)
         .with_context(|| format!("failed to parse {}", config_path.display()))?;
-
-    if let Ok(home) = env::var("LILACCAPS_HOME") {
-        config.runtime.home = expand_home(Path::new(&home))?;
+    let migrated = migrate_managed_defaults(&mut config);
+    if migrated {
+        write_config_file(&config_path, &config)?;
     }
+    resolve_config_paths(&mut config)?;
 
     let paths = ConfigPaths {
         config_path,
@@ -157,9 +160,8 @@ pub fn load_config(override_path: Option<PathBuf>) -> Result<LoadedConfig> {
     };
 
     let mut config = config;
-    if let Ok(home) = env::var("LILACCAPS_HOME") {
-        config.runtime.home = expand_home(Path::new(&home))?;
-    }
+    migrate_managed_defaults(&mut config);
+    resolve_config_paths(&mut config)?;
 
     let paths = ConfigPaths {
         config_path,
@@ -176,7 +178,7 @@ pub fn load_config(override_path: Option<PathBuf>) -> Result<LoadedConfig> {
 pub fn default_config() -> Result<Config> {
     let runtime_home = default_runtime_home()?;
     let skill_path = default_skill_path()?;
-    let github_repo = infer_github_repo();
+    let github_repo = Some(infer_github_repo().unwrap_or_else(default_github_repo));
 
     Ok(Config {
         runtime: RuntimeConfig { home: runtime_home },
@@ -243,7 +245,7 @@ pub fn default_burnin_outline_width() -> u32 {
 }
 
 pub fn default_translate_model() -> String {
-    "gemini-3.1-flash-lite-preview".to_string()
+    DEFAULT_TRANSLATE_MODEL.to_string()
 }
 
 pub fn default_translate_append() -> bool {
@@ -290,12 +292,8 @@ pub fn default_config_path() -> Result<PathBuf> {
 }
 
 pub fn write_config_file(config_path: &Path, config: &Config) -> Result<()> {
-    if let Some(parent) = config_path.parent() {
-        ensure_dir(parent)?;
-    }
-
     let rendered = toml::to_string_pretty(config).context("failed to render lilaccaps.toml")?;
-    fs::write(config_path, rendered)
+    atomic_write(config_path, rendered)
         .with_context(|| format!("failed to write config file {}", config_path.display()))
 }
 
@@ -313,11 +311,64 @@ pub fn expand_home(path: &Path) -> Result<PathBuf> {
     Ok(path.to_path_buf())
 }
 
+fn migrate_managed_defaults(config: &mut Config) -> bool {
+    let mut changed = false;
+    if config.translate.model == LEGACY_TRANSLATE_MODEL {
+        config.translate.model = default_translate_model();
+        changed = true;
+    }
+    if config
+        .release
+        .github_repo
+        .as_deref()
+        .is_none_or(|repo| repo.trim().is_empty())
+    {
+        config.release.github_repo = Some(default_github_repo());
+        changed = true;
+    }
+    changed
+}
+
+fn resolve_config_paths(config: &mut Config) -> Result<()> {
+    config.runtime.home = expand_home(&config.runtime.home)?;
+    config.agent.skill_path = expand_home(&config.agent.skill_path)?;
+    if let Some(model_path) = config.transcribe.model.path.as_mut() {
+        *model_path = expand_home(model_path)?;
+    }
+    if let Ok(home) = env::var("LILACCAPS_HOME") {
+        config.runtime.home = expand_home(Path::new(&home))?;
+    }
+    if !config.runtime.home.is_absolute() {
+        anyhow::bail!(
+            "runtime.home must be an absolute path or start with `~`: {}",
+            config.runtime.home.display()
+        );
+    }
+    if !config.agent.skill_path.is_absolute() {
+        anyhow::bail!(
+            "agent.skill_path must be an absolute path or start with `~`: {}",
+            config.agent.skill_path.display()
+        );
+    }
+    if let Some(model_path) = &config.transcribe.model.path
+        && !model_path.is_absolute()
+    {
+        anyhow::bail!(
+            "transcribe.model.path must be an absolute path or start with `~`: {}",
+            model_path.display()
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
 
-    use super::{Config, default_config, default_config_path, default_runtime_home, expand_home};
+    use super::{
+        Config, default_config, default_config_path, default_runtime_home, expand_home,
+        migrate_managed_defaults, resolve_config_paths,
+    };
 
     #[test]
     fn expands_tilde_paths() {
@@ -346,10 +397,14 @@ mod tests {
         assert_eq!(config.burnin.outline.colour, "black");
         assert_eq!(config.burnin.outline.width, 2);
         assert!(config.burnin.styles.is_empty());
-        assert_eq!(config.translate.model, "gemini-3.1-flash-lite-preview");
+        assert_eq!(config.translate.model, "gemini-3.1-flash-lite");
         assert!(config.translate.append);
         assert!(config.translate.default_targets.is_empty());
         assert!(config.translate.line_order.is_empty());
+        assert_eq!(
+            config.release.github_repo.as_deref(),
+            Some("zhuisDEV/lilaccaps")
+        );
     }
 
     #[test]
@@ -407,5 +462,33 @@ id = "base"
         assert!(rendered.contains("enabled = true"));
         assert!(rendered.contains("colour = \"black\""));
         assert!(rendered.contains("width = 2"));
+    }
+
+    #[test]
+    fn migrates_legacy_managed_defaults() {
+        let mut config = default_config().expect("default config should build");
+        config.translate.model = "gemini-3.1-flash-lite-preview".to_string();
+        config.release.github_repo = None;
+
+        assert!(migrate_managed_defaults(&mut config));
+        assert_eq!(config.translate.model, "gemini-3.1-flash-lite");
+        assert_eq!(
+            config.release.github_repo.as_deref(),
+            Some("zhuisDEV/lilaccaps")
+        );
+        assert!(!migrate_managed_defaults(&mut config));
+    }
+
+    #[test]
+    fn rejects_relative_managed_paths() {
+        let mut config = default_config().expect("default config should build");
+        config.runtime.home = "relative/runtime".into();
+        let error = resolve_config_paths(&mut config)
+            .expect_err("relative runtime path should be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("runtime.home must be an absolute path")
+        );
     }
 }

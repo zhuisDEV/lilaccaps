@@ -1,9 +1,9 @@
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
 use crate::config::load_config;
+use crate::runtime::{ensure_parent_dir, paths_refer_to_same_file};
 use crate::subtitles::{parse_srt_file, write_srt_file};
 use crate::translate::translate_lines;
 
@@ -33,6 +33,19 @@ pub fn run(
     let append = append.unwrap_or(loaded.config.translate.append);
     let model = loaded.config.translate.model.clone();
     let line_order = loaded.config.translate.line_order.clone();
+    let output = output.unwrap_or_else(|| default_output_path(&input, append));
+    if paths_refer_to_same_file(&input, &output)? {
+        bail!(
+            "translation output must be different from subtitle input: {}",
+            input.display()
+        );
+    }
+    ensure_parent_dir(&output).with_context(|| {
+        format!(
+            "failed to create output directory for translation {}",
+            output.display()
+        )
+    })?;
 
     let mut cues = parse_srt_file(&input)?;
     if cues.is_empty() {
@@ -56,15 +69,6 @@ pub fn run(
         cue.text = reorder_labeled_lines(&line_order, labeled_lines).join("\n");
     }
 
-    let output = output.unwrap_or_else(|| default_output_path(&input, append));
-    if let Some(parent) = output.parent() {
-        fs::create_dir_all(parent).with_context(|| {
-            format!(
-                "failed to create output directory for translation {}",
-                output.display()
-            )
-        })?;
-    }
     write_srt_file(&output, &cues)?;
 
     Ok(TranslateOutput {

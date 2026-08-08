@@ -1,148 +1,74 @@
-# lilaccaps Implementation Handoff
+# lilaccaps Handoff
 
-## Goal
-Implement a clean `lilaccaps` CLI with separate primary workflows:
+## Current Objective
 
-1. transcribe video/audio into subtitle output
-2. burn an existing subtitle file into a video
-3. translate subtitle text without changing timing
-4. apply a watermark to a video
+Prepare and publish `v0.1.19` as a dependency-health, lifecycle-safety, and reliability release.
+Keep transcription, translation, burn-in, and watermarking as separate commands.
 
-Do not collapse these into one command.
+## Root Cause Addressed
 
-## Fixed Decisions
-- Project and CLI name is `lilaccaps`
-- CLI is unified under `lilaccaps`
-- `lilaccaps burnin` is render-only
-- Caption generation is a separate command/workflow
-- `lilaccaps watermark` is render-only and separate from subtitle workflows
-- Video/audio to transcription may be delegated by the main OpenClaw agent to a subagent
-- Use Rust/TS/Deno
-- Keep the primary flow clean
-- Add fallback only after the main path is solid
+The reported transcription failure was not caused by the input video. Homebrew had upgraded x265
+while a stale linked FFmpeg binary still referenced the removed `libx265.215.dylib`. lilaccaps only
+checked whether `ffmpeg` existed on `PATH`, so it accepted a binary that could not launch.
 
-## Current Command Set
-Keep the main workflows explicit:
+The runtime now executes each dependency's version command. A present but broken executable is
+reported as `unhealthy`; `doctor --fix` reinstalls the mapped Homebrew formula, and `update` refreshes
+`ffmpeg-full`, `cmake`, and `imagemagick`, relinks FFmpeg Full, validates the toolchain, installs the
+locked release, and runs post-update setup validation. `--skip-dependencies` remains available for
+externally managed systems.
 
-```text
-lilaccaps transcribe <input>
-lilaccaps burnin <video> --subs <subtitle-file>
-lilaccaps watermark <video> --text <text>
-lilaccaps watermark <video> --image <logo.png>
-```
+## v0.1.19 Changes
 
-## Implementation Boundary
+- Updated all direct Rust dependencies and regenerated `Cargo.lock` with the current Rust toolchain.
+- Added dependency executable paths, versions, and startup errors to `doctor` and text/JSON `status`.
+- Added a stable GitHub repository fallback so remote installs can self-update outside a checkout.
+- Streamed Whisper model downloads to atomic temporary files instead of buffering them in memory.
+- Added unique scoped scratch files/directories with cleanup on success and failure.
+- Added atomic subtitle/video outputs and same-file protection for paths, symlinks, and hard links.
+- Added runtime ownership markers and conservative recursive-uninstall validation.
+- Moved Gemini credentials from URL query parameters to `x-goog-api-key`; explicit environment
+  values now take precedence over `.env`.
+- Replaced the retired `gemini-3.1-flash-lite-preview` default with
+  `gemini-3.1-flash-lite` and migrate the exact legacy managed default during install/update.
+- Made SRT parsing accept BOM, CRLF, flexible arrow spacing, and dot milliseconds while rejecting
+  reversed/overflowing timing; Whisper cues are clamped at chunk boundaries.
+- Routed ImageMagick caption/watermark text through owned files so `@path` remains literal text.
+- Made the remote installer invoke the exact Cargo-installed binary even when it is not on `PATH`.
+- Hardened CI with pinned current actions, FFmpeg Full, ShellCheck, actionlint, gitleaks, strict
+  Clippy, locked tests, and RustSec audit.
+- Synchronized README, quick-start skill, contributing guide, security policy, product plan, and
+  historical proposal status.
 
-### `transcribe`
-Owns:
-- media probing
-- audio extraction or normalization if needed
-- transcription
-- subtitle cleanup
-- `.srt` output
+## Verification State
 
-Does not own:
-- video burn-in rendering
+Completed locally:
 
-### `burnin`
-Owns:
-- validating existing subtitle input
-- rendering subtitles into video
-- writing final rendered video
+- FFmpeg Full 8.1.2, FFprobe 8.1.2, CMake 4.4.2, ImageMagick 7.1.2-29
+- Homebrew linkage checks for FFmpeg Full and ImageMagick
+- 84 unit tests
+- strict Clippy with all targets/features and locked dependencies
+- Rust formatting
+- `sh -n`, ShellCheck, actionlint, gitleaks, and Markdown link validation
+- clean `cargo audit` over 210 locked crates and no pending `cargo update`
+- locked optimized release build reporting `lilaccaps 0.1.19`
+- real 79.3-second music transcription and focused 42.3-second speech transcription
+- verified no overlap at the 30-second Whisper chunk boundary
+- FFmpeg/libass and ImageMagick burn-in paths plus text, PNG, and SVG watermark paths
+- visual frame inspection, `ffprobe` stream/duration checks, and unchanged-input SHA-256 checks
+- local install, config migration, ownership marker, generated skill, and bootstrap refresh
 
-Does not own:
-- transcription
-- subtitle generation
+Translation request construction, credential precedence, parsing, and missing-credential failure are
+covered, but a live Gemini translation was not run because this machine has no `GEMINI_API_KEY`.
 
-### `watermark`
-Owns:
-- validating video input
-- validating exactly one text or image watermark input
-- applying text or image overlay rendering
-- writing final watermarked video
+Publication sequence:
 
-Does not own:
-- transcription
-- subtitle generation
-- subtitle burn-in rendering
+- Commit and push the reviewed release scope.
+- Wait for the exact pushed commit to pass GitHub Actions.
+- Create and push the annotated tag, then publish the GitHub release.
+- Install/update from the published tag and complete final local health verification.
 
-## Engineering Notes
-- Keep command handlers thin
-- Move real work into pipeline modules
-- Keep primary backend selection straightforward
-- Put fallback backends behind adapters later, not in the initial command logic
-- Return exact output paths on success
-- Keep error messages concrete and file-oriented
+## Release Discipline
 
-## Suggested Build Order
-1. Scaffold Rust CLI entrypoint `lilaccaps`
-2. Add `transcribe` and `burnin` subcommands
-3. Implement `.srt` generation pipeline
-4. Implement burn-in rendering pipeline
-5. Add subagent delegation path for transcription if the surrounding OpenClaw integration needs it
-
-## What To Avoid
-- making `burnin` auto-generate subtitles
-- mixing transcription fallback with the primary transcription path
-- creating a convenience mega-command before core flows are stable
-- coupling agent orchestration directly to CLI command semantics
-
-## Deliverable Standard
-The next implementation should leave the repo with:
-- a clear CLI surface
-- separate caption and render modules
-- exact artifact paths in output
-- room to add fallback cleanly later
-
-## Current Handoff Notes
-- Native tool prerequisites are now surfaced explicitly in CLI status and preflight checks.
-- `cargo install` still cannot be intercepted by the CLI before compilation, so README guidance must stay accurate and prominent for `cmake`.
-- `status` distinguishes core runtime health from build/update readiness and fallback renderer readiness.
-- Runtime dependency tests should use synthetic missing commands so they remain stable across developer machines.
-- `doctor` is the shared prerequisite inspection entrypoint; `install` should reuse it instead of reintroducing bespoke dependency checks.
-- Automatic prerequisite repair is intentionally limited to macOS plus Homebrew and only for explicitly mapped packages.
-- The default config path now lives under the runtime home at `~/.lilac/lilaccaps/lilaccaps.toml`.
-- Transcription language now supports config default plus per-run CLI override via `--lang`; `"auto"` preserves Whisper auto-detection.
-- Config schema changes must stay backward-compatible on read; older configs missing `transcribe.language` should default to `"auto"` instead of breaking `update`.
-- Forced transcription language should retry with the detected language when Whisper returns no usable segments and detection identifies a different language.
-- The ImageMagick burn-in fallback must emit `PNG32:` overlays and normalize overlay inputs to `rgba`; otherwise ffmpeg can compose monochrome/transparent inputs into a black video stream.
-- For CJK subtitles in the ImageMagick fallback, prefer a CJK-capable macOS system font and render text via a `label:` image before expanding to the video canvas; the older full-canvas annotate path could silently produce transparent overlays.
-- Burn-in font choice should key off the subtitle text itself: CJK-heavy cues should prefer CJK-capable fonts, while Latin text can stay on the lighter Latin fallback.
-- Transcription should fall back across both language selection and decoding strategy: try beam search first, then greedy decoding, before treating a clip as having produced no subtitle text.
-- Whisper model resolution now supports `medium` and `medium.en` in addition to the smaller model sizes.
-- Empty-output transcription failures now include per-attempt diagnostics showing language, decode strategy, total segments, non-empty segments, and blank-segment counts.
-- Auto-language transcription now performs a dedicated detection step and then transcribes with the detected language explicitly, avoiding whisper.cpp's detect-only early return and reporting the effective language in command output.
-- Explicit `--lang` retries should not depend on language detection succeeding first; detected-language retries are optional fallback attempts, not a prerequisite for the requested language path.
-- README and generated bootstrap docs should distinguish minimum `ffmpeg` support from the recommended Homebrew `ffmpeg-full` install for native libass-based burn-in.
-- Successful `transcribe` runs should stay quiet: ffmpeg audio extraction now runs with `-hide_banner -loglevel error`, and Whisper backend logs are routed through `whisper-rs` logging hooks so normal runs only print the CLI summary.
-- Burn-in style now supports CLI overrides plus TOML defaults for `font` and `size`; `font = "auto"` keeps renderer font selection, and `size = 0` keeps automatic height-based scaling.
-- `burnin.advanced_styling` is the top-level switch for advanced multiline styling; when it is `false`, configured custom colour, line spacing, and `burnin.styles.<role>` are ignored so ffmpeg/libass can stay on the primary path when available, but explicit CLI `--colour` still overrides config for a single run.
-- `burnin.line_spacing` is now a TOML-only renderer setting; `0` means auto spacing, and a positive value forces the overlay renderer so multiline spacing can be honored consistently.
-- Burn-in colour now supports a global `burnin.colour` default plus per-line `burnin.styles.<role>.colour`; explicit colour values force the overlay renderer so custom fill colour is applied consistently.
-- Burn-in subtitles now have configurable outline defaults under `[burnin.outline]`: `enabled = true`, `colour = "black"`, and `width = 2`; CLI overrides are `--outline`, `--no-outline`, `--outline-colour`/`--outline-color`, and `--outline-width`.
-- `lilaccaps burnin` should print the actual `renderer` and `renderer_reason` to make fallback selection visible to the user.
-- In the ImageMagick fallback, do not combine `label:` fill and stroke in the same layer; preserve configured fill colour by rendering the outline as its own stroke-only layer, the fill as a separate fill-only layer, and the shadow behind the merged text.
-- Translation is a separate workflow: `translate` rewrites cue text but preserves cue timing and indexes exactly, so `burnin` can stay render-only.
-- Translation defaults now live under `[translate]` in `lilaccaps.toml`, and Gemini API credentials are loaded from `GEMINI_API_KEY` in the environment or from `$LILACCAPS_HOME/.env`.
-- Multilingual captions are represented as multi-line cue text, with `translate --append` adding one translated line per target language under the original subtitle text.
-- `translate.line_order` now controls the written top-to-bottom order of multilingual cue lines, and `burnin.styles.<role>` uses those same role labels to apply per-language font and size during rendering.
-- If explicit per-language fonts look worse than the renderer defaults, set `burnin.styles.<role>.font = "auto"` (or omit the per-role font) and keep only the per-language sizes.
-- The ImageMagick multiline fallback must create each `label:` image before applying border/stacking operations; otherwise `magick` can fail with `no images found for operation '-border'`.
-- The multiline ImageMagick fallback should keep vertical padding tight; large fixed borders make multilingual subtitle stacks look too loose.
-- The 2026-05-08 transcribe hang report was caused by the repro media being 3750.7 seconds long, not by an ffmpeg extraction failure; the intermediate mono16k WAV had the same duration, so Whisper was silently processing about 62.5 minutes of audio.
-- Transcription now detects language from only the first 30 seconds, avoids pre-detecting language before forced-language attempts, and processes audio in 30-second chunks with stderr duration/progress for long inputs.
-- The v0.1.11 release also clears current `cargo clippy -- -D warnings` findings, including pre-existing small style warnings in burn-in, render, and runtime helper code.
-- Watermarking is a separate render-only workflow: `lilaccaps watermark <video> --text <text>` or `--image <path>`, with `--position`, `--opacity`, `--size`, and `--margin` handled by ffmpeg drawtext/overlay filters.
-- Removed the obsolete `transcribe-hang-report.md` scratch report after the v0.1.11 transcription hang fix was confirmed.
-- Removed the obsolete `lilacreport.md` scratch report after confirming the burn-in `--colour` override bug is already fixed by CLI colour precedence.
-- v0.1.12 audit updated `rustls-webpki` to clear RustSec advisories and added watermark ffmpeg filter preflight checks for `drawtext` and `overlay`.
-- Direct dependency update completed locally: `reqwest` from `0.12.x` to `0.13.3` using the renamed `rustls` feature, and `toml` from `0.9.x` to `1.1.2`; blocking HTTP, config parse/write, tests, clippy, and audit all validate with the updated lockfile.
-- v0.1.13 release packages the direct dependency update for `reqwest` `0.13.3` and `toml` `1.1.2`.
-- v0.1.14 release packages burn-in subtitle outlines, including default `[burnin.outline]` settings, CLI overrides, and renderer support for both ffmpeg/libass and ImageMagick overlay fallback.
-- Runtime docs were synchronized manually after v0.1.14: `/Users/lilac/.lilac/lilaccaps/README.md` and `SKILL.md` were added, and `/Users/lilac/.openclaw/skills/lilaccaps/SKILL.md` plus `README.md` were updated while keeping `agent.skill_path` pointed at the OpenClaw skill path.
-- Runtime docs were clarified by role: `SKILL.md` is now a quick-start guide for basic settings, basic CLI, and where to find advanced settings; `README.md` is the full manual, with matching copies in `/Users/lilac/.lilac/lilaccaps` and `/Users/lilac/.openclaw/skills/lilaccaps`.
-- v0.1.15 release adds repo-root `SKILL.md` as the quick start, keeps repo `README.md` as the full manual, and updates package metadata for the documentation release.
-- Watermark text rendering now has an ImageMagick fallback for ffmpeg builds without `drawtext` or for failed drawtext runs; text outline CLI flags are supported, common font names resolve to file paths, SVG image watermarks are converted to PNG before overlaying, and `lilaccaps watermark` reports `renderer` plus `renderer_reason`.
-- v0.1.16 release packages the watermark reliability work and installs locally as `/Users/lilac/.cargo/bin/lilaccaps`, including `--outline-width` and `--outline-colour` support for text watermarks.
-- Burn-in overlay fallback now renders subtitle text with bounded ImageMagick `caption:` images at 90% of frame width, preserving explicit SRT line breaks while wrapping long single lines so text does not overflow outside the video.
-- v0.1.18 release packages the burn-in overlay wrapping fix and removes the obsolete watermark scratch report; the transcription workflow proposal remains untracked because it is not fully implemented yet.
+Do not publish a tag until the exact pushed commit passes CI. Stage only reviewed project changes,
+use an annotated `v0.1.19` tag, publish release notes that explain the FFmpeg/x265 root cause, and
+verify the installed binary reports `0.1.19` afterward.

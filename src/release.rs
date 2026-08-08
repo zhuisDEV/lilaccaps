@@ -1,4 +1,5 @@
 use std::process::Command;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use reqwest::blocking::Client;
@@ -10,6 +11,11 @@ pub struct ReleaseInfo {
     pub version: String,
 }
 
+pub fn default_github_repo() -> String {
+    normalize_github_repo(env!("CARGO_PKG_REPOSITORY"))
+        .unwrap_or_else(|_| "zhuisDEV/lilaccaps".to_string())
+}
+
 #[derive(Debug, Deserialize)]
 struct GitHubRelease {
     tag_name: String,
@@ -18,14 +24,20 @@ struct GitHubRelease {
 }
 
 pub fn latest_release(repo: Option<&str>) -> Result<Option<ReleaseInfo>> {
-    let Some(repo) = repo else {
-        return Ok(None);
+    let fallback;
+    let repo = match repo {
+        Some(repo) => repo,
+        None => {
+            fallback = default_github_repo();
+            &fallback
+        }
     };
-
     let normalized = normalize_github_repo(repo)?;
     let url = format!("https://api.github.com/repos/{normalized}/releases/latest");
     let client = Client::builder()
         .user_agent(format!("lilaccaps/{}", env!("CARGO_PKG_VERSION")))
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(60))
         .build()
         .context("failed to construct GitHub release client")?;
 
@@ -69,6 +81,7 @@ pub fn infer_github_repo() -> Option<String> {
 }
 
 pub fn normalize_github_repo(input: &str) -> Result<String> {
+    let input = input.trim();
     if input.starts_with("http://")
         || input.starts_with("https://")
         || input.starts_with("git@")
@@ -77,39 +90,52 @@ pub fn normalize_github_repo(input: &str) -> Result<String> {
         return normalize_github_remote_url(input);
     }
 
-    let trimmed = input.trim().trim_end_matches(".git");
-    if trimmed.split('/').count() != 2 {
-        bail!("invalid GitHub repo identifier: {input}");
-    }
-
-    Ok(trimmed.to_string())
+    normalize_github_slug(input)
 }
 
 fn normalize_github_remote_url(input: &str) -> Result<String> {
     let trimmed = input.trim().trim_end_matches(".git");
 
     if let Some(rest) = trimmed.strip_prefix("git@github.com:") {
-        return Ok(rest.to_string());
+        return normalize_github_slug(rest);
     }
 
     if let Some(rest) = trimmed.strip_prefix("https://github.com/") {
-        return Ok(rest.to_string());
+        return normalize_github_slug(rest);
     }
 
     if let Some(rest) = trimmed.strip_prefix("http://github.com/") {
-        return Ok(rest.to_string());
+        return normalize_github_slug(rest);
     }
 
     if let Some(rest) = trimmed.strip_prefix("ssh://git@github.com/") {
-        return Ok(rest.to_string());
+        return normalize_github_slug(rest);
     }
 
     bail!("unsupported GitHub remote URL: {input}")
 }
 
+fn normalize_github_slug(input: &str) -> Result<String> {
+    let trimmed = input.trim().trim_end_matches(".git");
+    let parts = trimmed.split('/').collect::<Vec<_>>();
+    if parts.len() != 2
+        || parts.iter().any(|part| {
+            part.is_empty()
+                || matches!(*part, "." | "..")
+                || !part.chars().all(|character| {
+                    character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+                })
+        })
+    {
+        bail!("invalid GitHub repo identifier: {input}");
+    }
+
+    Ok(trimmed.to_string())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::normalize_github_repo;
+    use super::{default_github_repo, normalize_github_repo};
 
     #[test]
     fn normalizes_short_repo() {
@@ -129,5 +155,18 @@ mod tests {
         let repo = normalize_github_repo("git@github.com:owner/name.git")
             .expect("ssh remote should normalize");
         assert_eq!(repo, "owner/name");
+    }
+
+    #[test]
+    fn package_repository_has_stable_update_fallback() {
+        assert_eq!(default_github_repo(), "zhuisDEV/lilaccaps");
+    }
+
+    #[test]
+    fn rejects_malformed_repo_identifiers() {
+        assert!(normalize_github_repo("owner/").is_err());
+        assert!(normalize_github_repo("owner/name/extra").is_err());
+        assert!(normalize_github_repo("owner/name?token=secret").is_err());
+        assert!(normalize_github_repo("owner/..").is_err());
     }
 }

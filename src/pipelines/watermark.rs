@@ -1,8 +1,8 @@
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
+use crate::runtime::{ScopedTempPath, ensure_parent_dir, parent_dir, paths_refer_to_same_file};
 use crate::watermark::{
     WatermarkPosition, WatermarkSource, WatermarkStyle, apply_watermark, normalized_opacity,
 };
@@ -49,20 +49,26 @@ pub fn run(
 
     let opacity = normalized_opacity(opacity)?;
     let output = output.unwrap_or_else(|| default_output_path(&video));
-    if output_matches_input(&video, &output)? {
+    if paths_refer_to_same_file(&video, &output)? {
         bail!(
             "watermark output must be different from input video: {}",
             video.display()
         );
     }
-    if let Some(parent) = output.parent() {
-        fs::create_dir_all(parent).with_context(|| {
-            format!(
-                "failed to create output directory for watermark {}",
-                output.display()
-            )
-        })?;
+    if let WatermarkSource::Image(path) = &source
+        && paths_refer_to_same_file(path, &output)?
+    {
+        bail!(
+            "watermark output must be different from watermark image: {}",
+            path.display()
+        );
     }
+    ensure_parent_dir(&output).with_context(|| {
+        format!(
+            "failed to create output directory for watermark {}",
+            output.display()
+        )
+    })?;
 
     let style = WatermarkStyle {
         position,
@@ -74,7 +80,10 @@ pub fn run(
         outline_colour,
         outline_width,
     };
-    let renderer = apply_watermark(&video, &output, &source, &style)?;
+    let extension = output.extension().and_then(|value| value.to_str());
+    let temporary = ScopedTempPath::file(parent_dir(&output), "watermark-output", extension);
+    let renderer = apply_watermark(&video, temporary.path(), &source, &style)?;
+    temporary.persist(&output)?;
 
     Ok(WatermarkOutput {
         video,
@@ -121,44 +130,12 @@ fn default_output_path(video: &Path) -> PathBuf {
     video.with_file_name(format!("{stem}.watermarked.{extension}"))
 }
 
-fn output_matches_input(video: &Path, output: &Path) -> Result<bool> {
-    if video == output {
-        return Ok(true);
-    }
-
-    if !output.exists() {
-        return Ok(false);
-    }
-
-    let video = fs::canonicalize(video)
-        .with_context(|| format!("failed to canonicalize video input {}", video.display()))?;
-    let output = fs::canonicalize(output).with_context(|| {
-        format!(
-            "failed to canonicalize watermark output {}",
-            output.display()
-        )
-    })?;
-    Ok(video == output)
-}
-
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::path::Path;
 
-    use super::{default_output_path, output_matches_input, resolve_source};
+    use super::{default_output_path, resolve_source};
     use crate::watermark::WatermarkSource;
-
-    fn temp_dir() -> PathBuf {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("test clock should be after unix epoch")
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "lilaccaps-watermark-test-{}-{unique}",
-            std::process::id()
-        ))
-    }
 
     #[test]
     fn default_output_path_adds_watermarked_suffix() {
@@ -180,23 +157,5 @@ mod tests {
         let err =
             resolve_source(Some("lilac".to_string()), Some("/tmp/logo.png".into())).unwrap_err();
         assert!(err.to_string().contains("only one"));
-    }
-
-    #[test]
-    fn output_match_check_catches_same_file_by_canonical_path() {
-        let dir = temp_dir();
-        std::fs::create_dir_all(&dir).expect("temp dir should be created");
-        let input = dir.join("input.mp4");
-        std::fs::write(&input, b"demo").expect("temp input should be written");
-        let canonical_input = std::fs::canonicalize(&input).expect("input should canonicalize");
-        let output = dir.join("output.mp4");
-
-        assert!(output_matches_input(&input, &input).expect("same path should compare"));
-        assert!(
-            output_matches_input(&input, &canonical_input).expect("canonical path should compare")
-        );
-        assert!(!output_matches_input(&input, &output).expect("missing output should not match"));
-
-        std::fs::remove_dir_all(&dir).expect("temp dir should be removed");
     }
 }

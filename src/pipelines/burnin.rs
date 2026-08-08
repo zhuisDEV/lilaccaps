@@ -1,4 +1,3 @@
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use std::collections::HashMap;
@@ -9,6 +8,7 @@ use crate::config::{
     BurninLineStyleConfig, BurninOutlineConfig, default_burnin_outline_width, load_config,
 };
 use crate::render::{BurninStyle, LineStyle, OutlineStyle, burn_in_subtitles};
+use crate::runtime::{ScopedTempPath, ensure_parent_dir, parent_dir, paths_refer_to_same_file};
 
 #[derive(Debug, Clone)]
 pub struct BurninOutput {
@@ -81,16 +81,35 @@ pub fn run(request: BurninRequest) -> Result<BurninOutput> {
     );
 
     let output = output.unwrap_or_else(|| default_output_path(&video));
-    if let Some(parent) = output.parent() {
-        fs::create_dir_all(parent).with_context(|| {
-            format!(
-                "failed to create output directory for burnin {}",
-                output.display()
-            )
-        })?;
+    if paths_refer_to_same_file(&video, &output)? {
+        bail!(
+            "burnin output must be different from input video: {}",
+            video.display()
+        );
     }
+    if paths_refer_to_same_file(&subs, &output)? {
+        bail!(
+            "burnin output must be different from subtitle input: {}",
+            subs.display()
+        );
+    }
+    ensure_parent_dir(&output).with_context(|| {
+        format!(
+            "failed to create output directory for burnin {}",
+            output.display()
+        )
+    })?;
 
-    let renderer = burn_in_subtitles(&loaded.paths.runtime_home, &video, &subs, &output, &style)?;
+    let extension = output.extension().and_then(|value| value.to_str());
+    let temporary = ScopedTempPath::file(parent_dir(&output), "burnin-output", extension);
+    let renderer = burn_in_subtitles(
+        &loaded.paths.runtime_home,
+        &video,
+        &subs,
+        temporary.path(),
+        &style,
+    )?;
+    temporary.persist(&output)?;
 
     Ok(BurninOutput {
         video,

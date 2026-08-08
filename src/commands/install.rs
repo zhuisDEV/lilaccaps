@@ -8,15 +8,15 @@ use crate::config::{LoadedConfig, load_or_init_config};
 use crate::integration::{ensure_skill_file, write_bootstrap_markdown};
 use crate::model::ensure_model_downloaded;
 use crate::runtime::{
-    cargo_bin_dir, collect_doctor_report, current_executable, ensure_dir,
-    fix_missing_dependencies_with_brew, install_binary_path, models_dir, tmp_dir,
+    cargo_bin_dir, collect_doctor_report, current_executable, ensure_dir, ensure_runtime_marker,
+    fix_dependencies_with_brew, install_binary_path, models_dir, tmp_dir,
 };
 
 pub fn run(args: InstallArgs) -> Result<()> {
     let mut report = collect_doctor_report();
     let mut fixed_packages = Vec::new();
     if args.fix && !report.brew_packages.is_empty() {
-        fixed_packages = fix_missing_dependencies_with_brew(&report)?;
+        fixed_packages = fix_dependencies_with_brew(&report)?;
         report = collect_doctor_report();
     }
 
@@ -33,7 +33,7 @@ pub fn run(args: InstallArgs) -> Result<()> {
             "install the missing prerequisites with your platform package manager".to_string()
         };
         bail!(
-            "missing prerequisites: {}. To continue, {}.",
+            "prerequisite check failed for: {}. To continue, {}.",
             report.missing_commands.join(", "),
             hint
         );
@@ -46,6 +46,7 @@ pub fn run(args: InstallArgs) -> Result<()> {
     } = load_or_init_config(args.config_path)?;
 
     ensure_dir(&paths.runtime_home)?;
+    ensure_runtime_marker(&paths.runtime_home)?;
     ensure_dir(&models_dir(&paths.runtime_home))?;
     ensure_dir(&tmp_dir(&paths.runtime_home))?;
     ensure_dir(&cargo_bin_dir()?)?;

@@ -1,5 +1,28 @@
 # Proposal: Add a Separate Video Subtitle Pipeline Skill for OpenClaw
 
+## Implementation Status (2026-08-08)
+
+This document is retained as the original architectural proposal. The dedicated implementation is
+now `lilaccaps`, with the repo-root `SKILL.md` as its OpenClaw quick start and `README.md` as the
+current manual.
+
+Implemented from this proposal:
+
+- local media to `.srt` transcription
+- subtitle translation and multilingual cue composition
+- burned-in subtitle video output
+- separate lifecycle, health, configuration, and OpenClaw integration boundaries
+
+Not currently implemented:
+
+- plain `.txt` transcripts or `.vtt`
+- selectable soft-subtitle muxing
+- speaker segmentation
+- automatic `media-ingest` download orchestration
+
+Those remain possible independent additions. They must compose with the existing commands rather
+than move acquisition, transcription, translation, and rendering into one hidden workflow.
+
 ## Conclusion
 Create a **new standalone skill** for subtitle generation and subtitle-enabled video output, instead of expanding `media-ingest` itself. Keep `media-ingest` focused on media acquisition, and let the new skill orchestrate transcription, `.srt` generation, translation, and subtitle muxing/burn-in through a proper subagent workflow.
 

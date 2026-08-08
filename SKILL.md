@@ -19,7 +19,6 @@ Do not hide transcription, translation, and burn-in inside one command unless th
 
 - Full manual: `README.md`
 - Config: `~/.lilac/lilaccaps/lilaccaps.toml`
-- Runtime quick-start copy: `~/.lilac/lilaccaps/SKILL.md`
 - OpenClaw skill path: `~/.openclaw/skills/lilaccaps/SKILL.md`
 - Runtime home: `~/.lilac/lilaccaps`
 - Models: `~/.lilac/lilaccaps/models`
@@ -38,21 +37,33 @@ lilaccaps doctor
 ```
 
 Healthy status should include `healthy = true`, `config_valid = true`, `model_ready = true`, and `missing = none`.
+Dependency entries include the resolved executable path, detected version, and any startup error. Use `lilaccaps doctor --fix`
+on macOS to install or repair unhealthy Homebrew packages.
 
 ## Install
 
 Recommended: install globally from GitHub with the remote installer:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zhuisDEV/lilaccaps/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/zhuisDEV/lilaccaps/main/install.sh | sh -s -- --fix
 ```
+
+Omit `--fix` only when `ffmpeg`, `ffprobe`, `cmake`, and ImageMagick are managed separately.
 
 If you do not want to pipe a remote script into `sh`, use Cargo directly:
 
 ```bash
 cargo install --git https://github.com/zhuisDEV/lilaccaps.git --locked --force lilaccaps
-lilaccaps install
+"${CARGO_HOME:-$HOME/.cargo}/bin/lilaccaps" install
 ```
+
+Update lilaccaps and its managed Homebrew dependencies:
+
+```bash
+lilaccaps update
+```
+
+Use `lilaccaps update --skip-dependencies` only when system dependencies are managed separately.
 
 ## Basic CLI
 
@@ -116,7 +127,7 @@ language = "auto"
 id = "medium"
 
 [translate]
-model = "gemini-3.1-flash-lite-preview"
+model = "gemini-3.1-flash-lite"
 append = true
 default_targets = ["zh-hans", "en"]
 line_order = ["source", "zh-hans", "en"]
@@ -153,3 +164,4 @@ When using `lilaccaps`:
 3. Use the explicit command for the task.
 4. Prefer explicit `--output` paths for important outputs.
 5. Report generated file paths and burn-in renderer choice.
+6. Never reuse an input path as an output path; lilaccaps rejects symlink and hard-link aliases too.

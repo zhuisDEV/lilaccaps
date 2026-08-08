@@ -6,7 +6,7 @@ use anyhow::{Context, Result, bail};
 use clap::ValueEnum;
 
 use crate::media::{ensure_ffmpeg_available, ffmpeg_supports_filter};
-use crate::runtime::{MAGICK_DEPENDENCY, ensure_dependency};
+use crate::runtime::{MAGICK_DEPENDENCY, ScopedTempPath, ensure_dependency, parent_dir};
 
 const ARIAL_FONT_CANDIDATES: [&str; 3] = [
     "/System/Library/Fonts/Supplemental/Arial.ttf",
@@ -194,20 +194,18 @@ fn apply_text_watermark_overlay_fallback(
     style: &WatermarkStyle,
     reason: &'static str,
 ) -> Result<WatermarkRendererReport> {
-    let rendered = temp_sidecar_path(output, "watermark-text");
-    render_text_watermark_image(text, style, &rendered)?;
+    let rendered = ScopedTempPath::file(parent_dir(output), "watermark-text", Some("png"));
+    render_text_watermark_image(text, style, rendered.path())?;
     let mut overlay_style = style.clone();
     overlay_style.size = 0;
-    let result = apply_image_watermark_with_reasons(
+    apply_image_watermark_with_reasons(
         video,
         output,
-        &rendered,
+        rendered.path(),
         &overlay_style,
         "imagemagick-text-overlay",
         vec![reason],
-    );
-    let _ = fs::remove_file(&rendered);
-    result
+    )
 }
 
 fn apply_image_watermark(
@@ -217,18 +215,16 @@ fn apply_image_watermark(
     style: &WatermarkStyle,
 ) -> Result<WatermarkRendererReport> {
     if image_needs_conversion(image) {
-        let converted = temp_sidecar_path(output, "watermark-image");
-        convert_image_watermark(image, &converted, style)?;
-        let result = apply_image_watermark_with_reasons(
+        let converted = ScopedTempPath::file(parent_dir(output), "watermark-image", Some("png"));
+        convert_image_watermark(image, converted.path(), style)?;
+        return apply_image_watermark_with_reasons(
             video,
             output,
-            &converted,
+            converted.path(),
             style,
             "image-overlay",
             vec!["image_converted"],
         );
-        let _ = fs::remove_file(&converted);
-        return result;
     }
 
     apply_image_watermark_with_reasons(video, output, image, style, "image-overlay", Vec::new())
@@ -350,9 +346,17 @@ pub fn image_filter(style: &WatermarkStyle) -> String {
 fn render_text_watermark_image(text: &str, style: &WatermarkStyle, output: &Path) -> Result<()> {
     ensure_dependency(MAGICK_DEPENDENCY)?;
 
+    let text_file = ScopedTempPath::file(parent_dir(output), "watermark-text", Some("txt"));
+    fs::write(text_file.path(), text).with_context(|| {
+        format!(
+            "failed to write temporary watermark text {}",
+            text_file.path().display()
+        )
+    })?;
+    let text_source = format!("label:@{}", text_file.path().display());
     let output_target = format!("PNG32:{}", output.display());
     let status = Command::new("magick")
-        .args(text_watermark_image_args(text, style))
+        .args(text_watermark_image_args(&text_source, style))
         .arg(output_target)
         .status()
         .with_context(|| {
@@ -398,7 +402,7 @@ fn convert_image_watermark(image: &Path, output: &Path, style: &WatermarkStyle) 
     Ok(())
 }
 
-fn text_watermark_image_args(text: &str, style: &WatermarkStyle) -> Vec<String> {
+fn text_watermark_image_args(text_source: &str, style: &WatermarkStyle) -> Vec<String> {
     let font_size = if style.size == 0 { 32 } else { style.size };
     let fill_colour = match style.colour.trim() {
         "" => "white",
@@ -423,11 +427,19 @@ fn text_watermark_image_args(text: &str, style: &WatermarkStyle) -> Vec<String> 
             outline_colour,
             Some(style.outline_width),
             font_size,
-            text,
+            text_source,
         );
         args.push(")".to_string());
         args.push("(".to_string());
-        append_label_layer_args(&mut args, &font, fill_colour, "none", None, font_size, text);
+        append_label_layer_args(
+            &mut args,
+            &font,
+            fill_colour,
+            "none",
+            None,
+            font_size,
+            text_source,
+        );
         args.push(")".to_string());
         args.push("-background".to_string());
         args.push("none".to_string());
@@ -436,7 +448,15 @@ fn text_watermark_image_args(text: &str, style: &WatermarkStyle) -> Vec<String> 
         args.push("+repage".to_string());
         args.push(")".to_string());
     } else {
-        append_label_layer_args(&mut args, &font, fill_colour, "none", None, font_size, text);
+        append_label_layer_args(
+            &mut args,
+            &font,
+            fill_colour,
+            "none",
+            None,
+            font_size,
+            text_source,
+        );
     }
 
     args.push("-bordercolor".to_string());
@@ -453,7 +473,7 @@ fn append_label_layer_args(
     stroke_colour: &str,
     stroke_width: Option<u32>,
     font_size: u32,
-    text: &str,
+    text_source: &str,
 ) {
     args.push("-background".to_string());
     args.push("none".to_string());
@@ -471,7 +491,7 @@ fn append_label_layer_args(
 
     args.push("-pointsize".to_string());
     args.push(font_size.to_string());
-    args.push(format!("label:{text}"));
+    args.push(text_source.to_string());
 }
 
 pub fn resolve_watermark_font(requested: Option<&str>) -> Option<String> {
@@ -526,14 +546,6 @@ fn image_needs_conversion(path: &Path) -> bool {
         .is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "svg" | "svgz"))
 }
 
-fn temp_sidecar_path(output: &Path, suffix: &str) -> PathBuf {
-    let stem = output
-        .file_stem()
-        .and_then(|item| item.to_str())
-        .unwrap_or("output");
-    output.with_file_name(format!(".{stem}.{suffix}.png"))
-}
-
 fn escape_drawtext_text(value: &str) -> String {
     value
         .replace('\\', "\\\\")
@@ -552,8 +564,7 @@ fn escape_drawtext_value(value: &str) -> String {
 mod tests {
     use super::{
         WatermarkPosition, WatermarkStyle, image_filter, image_needs_conversion,
-        named_font_candidates, normalized_opacity, temp_sidecar_path, text_filter,
-        text_watermark_image_args,
+        named_font_candidates, normalized_opacity, text_filter, text_watermark_image_args,
     };
     use std::path::Path;
 
@@ -658,17 +669,11 @@ mod tests {
         style.colour = "#E19CFF".to_string();
         style.outline_width = 2;
 
-        let args = text_watermark_image_args("Lilac Captions", &style);
+        let args = text_watermark_image_args("label:@/tmp/watermark.txt", &style);
 
         assert!(args.iter().any(|arg| arg == "-strokewidth"));
         assert!(args.iter().any(|arg| arg == "#E19CFF"));
-        assert!(args.iter().any(|arg| arg == "label:Lilac Captions"));
+        assert!(args.iter().any(|arg| arg == "label:@/tmp/watermark.txt"));
         assert!(args.iter().any(|arg| arg == "-layers"));
-    }
-
-    #[test]
-    fn temp_sidecar_path_stays_next_to_output() {
-        let path = temp_sidecar_path(Path::new("/tmp/video.out.mp4"), "watermark-text");
-        assert_eq!(path, Path::new("/tmp/.video.out.watermark-text.png"));
     }
 }

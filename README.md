@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/zhuisDEV/lilaccaps/actions/workflows/ci.yml/badge.svg)](https://github.com/zhuisDEV/lilaccaps/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
-[![Rust](https://img.shields.io/badge/language-Rust-orange.svg)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/language-Rust-orange.svg)](https://rust-lang.org/)
 
 `lilaccaps` is a clean Rust CLI for separate subtitle and video rendering workflows:
 
@@ -14,7 +14,8 @@
 The command model stays explicit:
 
 - `lilaccaps doctor` inspects local prerequisites and setup health
-- `lilaccaps doctor --fix` installs missing macOS packages through Homebrew when possible
+- `lilaccaps doctor --fix` installs or repairs unhealthy macOS packages through Homebrew
+- `lilaccaps update` updates managed Homebrew dependencies before updating the CLI
 - `lilaccaps transcribe` generates subtitle artifacts such as `.srt`
 - `lilaccaps translate` adds one or more translated lines to subtitle cues
 - `lilaccaps burnin` is render-only and never hides transcription inside the command
@@ -33,7 +34,9 @@ The command model stays explicit:
 - Unified CLI under `lilaccaps`
 - `transcribe`, `translate`, `burnin`, and `watermark` kept as separate first-class workflows
 - Managed Whisper model download under the runtime home
+- Streamed, atomic model downloads and atomic media/subtitle outputs
 - Runtime health checks through `lilaccaps status`
+- Automatic Homebrew dependency refresh during `lilaccaps update`
 - Repo-root `SKILL.md` quick start plus this README as the full manual
 - Generated OpenClaw skill bootstrap
 - Clean primary and fallback separation for rendering
@@ -64,45 +67,48 @@ brew install ffmpeg-full cmake imagemagick
 
 ## Install
 
-Recommended: install globally from the GitHub repo with the remote installer:
+Recommended: install globally from the GitHub repo and repair/install mapped macOS dependencies:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zhuisDEV/lilaccaps/main/install.sh | sh -s -- --fix
+```
+
+The remote installer is the recommended install path. It installs the `lilaccaps` binary with
+Cargo and then runs `lilaccaps install` to initialize the runtime config, model directory, and
+skill bootstrap files. It invokes the exact binary Cargo installed, so the first install also works
+when Cargo's bin directory is not yet on `PATH`.
+
+To leave system dependencies untouched, omit `--fix`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zhuisDEV/lilaccaps/main/install.sh | sh
 ```
 
-The remote installer is the recommended install path. It installs the `lilaccaps` binary with
-Cargo and then runs `lilaccaps install` to initialize the runtime config, model directory, and
-skill bootstrap files.
-
-To let the installer use Homebrew for mapped missing prerequisites on macOS, pass `--fix`:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/zhuisDEV/lilaccaps/main/install.sh | sh -s -- --fix
-```
+Set `LILACCAPS_INSTALL_ROOT` to an absolute path to use a Cargo install root other than
+`CARGO_HOME` or `~/.cargo`.
 
 If you prefer not to pipe a remote script into `sh`, run the same primary install directly:
 
 ```bash
 brew install ffmpeg-full cmake imagemagick
 cargo install --git https://github.com/zhuisDEV/lilaccaps.git --locked --force lilaccaps
-lilaccaps install
+"${CARGO_HOME:-$HOME/.cargo}/bin/lilaccaps" install
 ```
 
 For local development, build from a checkout and install with cargo:
 
 ```bash
 brew install ffmpeg-full cmake imagemagick
-cargo install --path .
-lilaccaps install
+cargo install --path . --locked
+"${CARGO_HOME:-$HOME/.cargo}/bin/lilaccaps" install
 ```
 
 If `cmake` is missing, `cargo install` fails while compiling `whisper-rs-sys` before the
 `lilaccaps` binary exists. Install prerequisites first, then rerun `cargo install`.
 
-`doctor --fix` installs the minimum mapped packages through Homebrew after the binary exists,
-but it does not currently upgrade a plain `ffmpeg` install to `ffmpeg-full`. If you want
-native subtitle burn-in instead of the ImageMagick fallback, install an `ffmpeg` build with
-`libass` support yourself.
+`doctor` executes each dependency's version command, so a binary with broken dynamic-library
+links is reported as unhealthy instead of available. On macOS, `doctor --fix` installs or
+reinstalls the mapped package and prefers `ffmpeg-full` for native subtitle rendering.
 
 After the binary exists, you can inspect or repair prerequisites with:
 
@@ -112,8 +118,8 @@ lilaccaps doctor --fix
 lilaccaps install --fix
 ```
 
-`--fix` currently supports macOS through Homebrew and installs only the missing packages
-that `lilaccaps` maps explicitly.
+`--fix` currently supports macOS through Homebrew and repairs only packages that `lilaccaps`
+maps explicitly.
 
 After installation, `lilaccaps status` reports:
 
@@ -121,6 +127,35 @@ After installation, `lilaccaps status` reports:
 - build/update readiness (`cargo_available`, `cmake_available`, `build_ready`)
 - fallback renderer readiness (`magick_available`, `fallback_renderer_ready`)
 - fixability (`brew_packages`, `can_fix_with_brew`)
+- dependency probe status, resolved executable path, detected version, and startup error
+- release-check errors separately from the last known version fields
+
+## Update
+
+Update lilaccaps and its managed runtime dependencies:
+
+```bash
+lilaccaps update
+```
+
+On macOS with Homebrew, the update flow refreshes package metadata, installs or upgrades
+`ffmpeg-full`, `cmake`, and `imagemagick`, relinks `ffmpeg-full`, validates every dependency,
+installs the latest stable lilaccaps release, and runs the new binary's install validation to
+refresh generated bootstrap/skill files. This repairs ABI mismatches such as an
+older ffmpeg binary referring to a removed x265 dynamic library.
+
+Skip system dependency updates when they are managed separately:
+
+```bash
+lilaccaps update --skip-dependencies
+```
+
+Rust crate dependencies are compiled into lilaccaps and locked by each release. They are
+updated and tested when a new lilaccaps release is prepared, not rewritten on an end-user
+machine at runtime.
+
+`update` also migrates managed config defaults when an upstream preview is retired. Explicit
+custom values remain configurable in `lilaccaps.toml`.
 
 This initializes:
 
@@ -133,8 +168,12 @@ For translation, create a local `.env` file under the runtime home, for example
 `~/.lilac/lilaccaps/.env`, and set:
 
 ```bash
-GEMINI_API_KEY=your_api_key_here
+GEMINI_API_KEY=your_google_auth_key_here
 ```
+
+An exported `GEMINI_API_KEY` takes precedence over `.env`; local files never override an explicit
+process environment value. The key is sent in the `x-goog-api-key` request header rather than in
+the request URL. Use a current [Gemini API key](https://ai.google.dev/gemini-api/docs/api-key).
 
 ## Usage
 
@@ -203,6 +242,11 @@ lilaccaps status
 lilaccaps doctor
 ```
 
+All generated subtitle and video outputs are written through a temporary path and renamed only
+after successful completion. Commands reject an output that resolves to an input file, including
+through a symlink or hard link. Per-run audio, overlay, and watermark scratch files are uniquely
+named and removed after both successful and failed runs.
+
 ## Configuration
 
 The default config file is `~/.lilac/lilaccaps/lilaccaps.toml`.
@@ -229,6 +273,8 @@ Important values:
 - `burnin.outline.width`
 
 `LILACCAPS_HOME` overrides the runtime home at runtime.
+Runtime, skill, and explicit model paths must be absolute or begin with `~`; relative managed paths
+are rejected so lifecycle commands cannot change meaning with the current working directory.
 
 `transcribe.language` defaults to `"auto"`. Set it to a Whisper language code such as
 `"en"`, `"zh"`, or `"ja"` to force transcription in a specific language. `--lang` on
@@ -260,7 +306,9 @@ Supported `transcribe.model.id` values currently include `tiny`, `base`, `small`
 and their `.en` variants. For Chinese, Japanese, and other non-English speech, use the
 non-`.en` models.
 
-`translate.model` defaults to `"gemini-3.1-flash-lite-preview"`. `translate.append`
+`translate.model` defaults to `"gemini-3.1-flash-lite"`. The retired
+`"gemini-3.1-flash-lite-preview"` managed default is migrated automatically during install or
+update. `translate.append`
 defaults to `true`, which means translated lines are appended below the original cue text.
 `translate.default_targets` can provide default `--to` languages for `lilaccaps translate`.
 `translate.line_order` controls top-to-bottom line order inside each multilingual cue.
@@ -269,15 +317,29 @@ Example:
 
 ```toml
 [translate]
-model = "gemini-3.1-flash-lite-preview"
+model = "gemini-3.1-flash-lite"
 append = true
 default_targets = ["en", "ja"]
 line_order = ["source", "ja", "en"]
 ```
 
-`lilaccaps translate` loads `GEMINI_API_KEY` from the environment or from
+`lilaccaps translate` loads `GEMINI_API_KEY` from the environment first, then from
 `$LILACCAPS_HOME/.env` (default `~/.lilac/lilaccaps/.env`). It keeps cue timing and
 indexes unchanged and only rewrites cue text.
+
+## Uninstall
+
+Preview the owned paths, then confirm removal explicitly:
+
+```bash
+lilaccaps uninstall
+lilaccaps uninstall --yes
+```
+
+Install creates a `.lilaccaps-runtime` ownership marker. Recursive uninstall refuses relative,
+symlinked, shallow, protected, or unmarked custom runtime directories before it removes the binary, config,
+or generated skill. The historical default `~/.lilac/lilaccaps` remains removable for compatibility
+with installations created before the marker was introduced.
 
 `burnin.font` defaults to `"auto"`, which lets the renderer choose a suitable font. The
 ImageMagick fallback prefers a CJK-capable font for CJK subtitles and a lighter Latin font

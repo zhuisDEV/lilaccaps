@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -7,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use crate::media::{
     ass_colour, ensure_ffmpeg_available, ffmpeg_supports_filter, subtitles_filter, video_size,
 };
-use crate::runtime::{MAGICK_DEPENDENCY, ensure_dependency, ensure_dir, tmp_dir};
+use crate::runtime::{MAGICK_DEPENDENCY, ScopedTempPath, ensure_dependency, tmp_dir};
 use crate::subtitles::{SubtitleCue, parse_srt_file};
 
 const CJK_FONT_CANDIDATES: [&str; 3] = [
@@ -122,7 +123,7 @@ struct TextLayerSpec<'a> {
     stroke_colour: &'a str,
     stroke_width: Option<u32>,
     point_size: u32,
-    text: &'a str,
+    text_source: &'a str,
     wrap_width: u32,
 }
 
@@ -216,10 +217,9 @@ fn burn_in_with_overlay_fallback(
     }
 
     let (width, height) = video_size(video)?;
-    let work_dir = tmp_dir(runtime_home).join("burnin-overlays");
-    ensure_dir(&work_dir)?;
+    let work_dir = ScopedTempPath::directory(&tmp_dir(runtime_home), "burnin-overlays")?;
 
-    let overlays = render_overlay_images(&work_dir, width, height, &cues, style)?;
+    let overlays = render_overlay_images(work_dir.path(), width, height, &cues, style)?;
     burn_in_with_overlay_images(video, &overlays, output)
 }
 
@@ -232,10 +232,10 @@ fn render_overlay_images(
 ) -> Result<Vec<(SubtitleCue, PathBuf)>> {
     let mut overlays = Vec::with_capacity(cues.len());
 
-    for cue in cues {
-        let image_path = work_dir.join(format!("cue-{:04}.png", cue.index));
+    for (sequence, cue) in cues.iter().enumerate() {
+        let image_path = work_dir.join(format!("cue-{sequence:04}-{}.png", cue.index));
         let image_target = format!("PNG32:{}", image_path.display());
-        let status = render_overlay_image(width, height, cue, style, &image_target)
+        let status = render_overlay_image(work_dir, width, height, cue, style, &image_target)
             .with_context(|| format!("failed to start ImageMagick for cue {}", cue.index))?;
 
         if !status.success() {
@@ -252,6 +252,7 @@ fn render_overlay_images(
 }
 
 fn render_overlay_image(
+    work_dir: &Path,
     width: u32,
     height: u32,
     cue: &SubtitleCue,
@@ -260,11 +261,13 @@ fn render_overlay_image(
 ) -> Result<std::process::ExitStatus> {
     let lines = cue.text.lines().collect::<Vec<_>>();
     let mut command = Command::new("magick");
+    let mut caption_files = Vec::new();
     let default_point_size = style.size.unwrap_or_else(|| point_size_for_height(height));
     let wrap_width = subtitle_wrap_width(width);
 
     if style.has_line_overrides() && lines.len() > 1 {
         for (index, line) in lines.iter().enumerate() {
+            let text_source = caption_text_source(work_dir, line, &mut caption_files)?;
             let line_style = line_style_for_index(style, index, line);
             let font_path = line_style
                 .font
@@ -286,7 +289,7 @@ fn render_overlay_image(
                 &font_path,
                 fill_colour,
                 point_size,
-                line,
+                &text_source,
                 wrap_width,
                 style,
             )
@@ -304,6 +307,7 @@ fn render_overlay_image(
             .arg("center")
             .arg("-append");
     } else {
+        let text_source = caption_text_source(work_dir, &cue.text, &mut caption_files)?;
         let font_path = style
             .font
             .as_deref()
@@ -315,7 +319,7 @@ fn render_overlay_image(
             &font_path,
             fill_colour,
             default_point_size,
-            &cue.text,
+            &text_source,
             wrap_width,
             style,
         )
@@ -342,7 +346,7 @@ fn append_text_with_shadow<'a>(
     font_path: &str,
     fill_colour: &str,
     point_size: u32,
-    text: &str,
+    text_source: &str,
     wrap_width: u32,
     style: &BurninStyle,
 ) -> &'a mut Command {
@@ -352,7 +356,7 @@ fn append_text_with_shadow<'a>(
         font_path,
         fill_colour,
         point_size,
-        text,
+        text_source,
         wrap_width,
         &style.outline,
     );
@@ -377,7 +381,7 @@ fn append_text_label(
     font_path: &str,
     fill_colour: &str,
     point_size: u32,
-    text: &str,
+    text_source: &str,
     wrap_width: u32,
     outline: &OutlineStyle,
 ) {
@@ -391,7 +395,7 @@ fn append_text_label(
                 stroke_colour: outline.colour.as_deref().unwrap_or("black"),
                 stroke_width: Some(outline.width),
                 point_size,
-                text,
+                text_source,
                 wrap_width,
             },
         );
@@ -407,7 +411,7 @@ fn append_text_label(
             stroke_colour: "none",
             stroke_width: None,
             point_size,
-            text,
+            text_source,
             wrap_width,
         },
     );
@@ -451,9 +455,26 @@ fn label_layer_args(spec: TextLayerSpec<'_>) -> Vec<String> {
         spec.point_size.to_string(),
         "-size".to_string(),
         format!("{}x", spec.wrap_width),
-        format!("caption:{}", spec.text),
+        spec.text_source.to_string(),
     ]);
     args
+}
+
+fn caption_text_source(
+    work_dir: &Path,
+    text: &str,
+    files: &mut Vec<ScopedTempPath>,
+) -> Result<String> {
+    let file = ScopedTempPath::file(work_dir, "caption-text", Some("txt"));
+    fs::write(file.path(), text).with_context(|| {
+        format!(
+            "failed to write temporary caption text {}",
+            file.path().display()
+        )
+    })?;
+    let source = format!("caption:@{}", file.path().display());
+    files.push(file);
+    Ok(source)
 }
 
 fn burn_in_with_overlay_images(
@@ -714,15 +735,12 @@ mod tests {
             stroke_colour: "black",
             stroke_width: Some(2),
             point_size: 42,
-            text: "This is a long subtitle line",
+            text_source: "caption:@/tmp/caption.txt",
             wrap_width: 1152,
         });
 
         assert!(args.windows(2).any(|items| items == ["-size", "1152x"]));
-        assert!(
-            args.iter()
-                .any(|arg| arg == "caption:This is a long subtitle line")
-        );
+        assert!(args.iter().any(|arg| arg == "caption:@/tmp/caption.txt"));
         assert!(!args.iter().any(|arg| arg.starts_with("label:")));
     }
 

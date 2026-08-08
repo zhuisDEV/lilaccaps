@@ -2,9 +2,7 @@ use anyhow::Result;
 
 use crate::cli::DoctorArgs;
 use crate::config::load_config;
-use crate::runtime::{
-    collect_doctor_report, detect_runtime_health, fix_missing_dependencies_with_brew,
-};
+use crate::runtime::{collect_doctor_report, detect_runtime_health, fix_dependencies_with_brew};
 
 pub fn run(args: DoctorArgs) -> Result<()> {
     let loaded = load_config(args.config_path)?;
@@ -12,7 +10,7 @@ pub fn run(args: DoctorArgs) -> Result<()> {
     let mut fixed_packages = Vec::new();
 
     if args.fix && !report.brew_packages.is_empty() {
-        fixed_packages = fix_missing_dependencies_with_brew(&report)?;
+        fixed_packages = fix_dependencies_with_brew(&report)?;
         report = collect_doctor_report();
     }
 
@@ -64,7 +62,32 @@ pub fn run(args: DoctorArgs) -> Result<()> {
         println!(
             "dependency.{} = {}",
             status.dependency.name,
-            if status.available { "ok" } else { "missing" }
+            if status.healthy {
+                "ok"
+            } else if status.available {
+                "unhealthy"
+            } else {
+                "missing"
+            }
+        );
+        println!(
+            "dependency.{}.path = {}",
+            status.dependency.name,
+            status
+                .path
+                .as_deref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "unavailable".to_string())
+        );
+        println!(
+            "dependency.{}.version = {}",
+            status.dependency.name,
+            status.version.as_deref().unwrap_or("unavailable")
+        );
+        println!(
+            "dependency.{}.error = {}",
+            status.dependency.name,
+            status.error.as_deref().unwrap_or("none")
         );
     }
 

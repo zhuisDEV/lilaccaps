@@ -1,393 +1,104 @@
-# lilaccaps Control Plan
+# lilaccaps Product and Engineering Plan
 
 ## Purpose
-`lilaccaps` is the canonical CLI and project name for a clean subtitle pipeline focused on three distinct responsibilities:
 
-1. subtitle generation
-2. subtitle embedding
-3. subtitle rendering
+`lilaccaps` is the canonical Rust CLI for local subtitle and video-rendering workflows. Each command
+owns one explicit artifact transformation; lifecycle work remains separate from media processing.
 
-The primary flow must keep these responsibilities separate. Fallback behavior must not be mixed into the primary path.
+## Current Product
 
-## Product Decisions
-- Canonical name: `lilaccaps`
-- Unified CLI entrypoint: `lilaccaps`
-- CLI lifecycle commands include `install`, `update`, `status`, and `uninstall`
-- `lilaccaps embed` is embed-only
-- `lilaccaps burnin` is render-only
-- Subtitle generation is a separate command/workflow
-- Video/audio to transcription may be delegated by the main OpenClaw agent to a subagent
-- Use Rust/TS/Deno
-- Keep code and design clean and tidy
-
-## Runtime And Configuration
-
-### Config File
-- Config file name: `lilaccaps.toml`
-
-Primary config responsibilities:
-- define the runtime home directory
-- define agent integration paths
-- persist explicit user overrides
-
-### Runtime Home
-- environment variable name: `LILACCAPS_HOME`
-- runtime home concept in docs may also be described as `$lilaccaps_home`
-- default directory: `~/.lilac/lilaccaps`
-
-The runtime home should store:
-- runtime state
-- logs if needed
-- cached artifacts if needed
-- integration/bootstrap files if needed
-
-### Agent Skill Path
-The config should include an agent skill path.
-
-OpenClaw default target:
-- `~/.openclaw/skills/lilaccaps/SKILL.md`
-
-Preferred behavior:
-1. detect an existing compatible agent skill directory automatically
-2. if detection is inconclusive, fall back to explicit config
-3. if setup still remains ambiguous, provide a generated bootstrap document with exact instructions
-
-### Bootstrap Guidance
-If autodetection is not reliable enough in the first implementation, ship a simple `bootstrap.md` flow that tells the agent/operator how to:
-- set `LILACCAPS_HOME`
-- place or link the skill file
-- confirm the integration path
-- verify status
-
-## Primary Flow
-
-### Flow A: Transcribe To Subtitles
-Input:
-- local video file
-- local audio file
-
-Output:
-- subtitle artifact such as `.srt`
-- optional transcript artifact if explicitly supported
-
-Responsibility:
-- probe input
-- extract or normalize audio if needed
-- run transcription
-- normalize subtitle timing and line wrapping
-- validate subtitle format
-- write exact output paths
-
-This flow should be exposed as a dedicated command:
-- `lilaccaps transcribe <input>`
-
-### Flow B: Burn In Existing Subtitles
-Input:
-- local video file
-- existing subtitle or caption file
-
-Output:
-- rendered video with burned-in subtitles
-
-Responsibility:
-- validate video input
-- validate subtitle input
-- render subtitles into video
-- write exact output path
-
-Command:
-- `lilaccaps burnin <video> --subs <subtitle-file>`
-
-This command must not trigger subtitle generation internally.
-
-### Flow C: Embed Existing Subtitles
-Input:
-- local video file
-- existing subtitle or caption file
-
-Output:
-- video container with an embedded subtitle track
-
-Responsibility:
-- validate video input
-- validate subtitle input
-- mux subtitle data into the output container
-- write exact output path
-
-Command:
-- `lilaccaps embed <video> --subs <subtitle-file>`
-
-This command must not trigger subtitle generation internally.
-
-## Command Model
-Proposed top-level shape:
+Implemented commands:
 
 ```text
-lilaccaps install [options]
-lilaccaps update [options]
-lilaccaps status [options]
-lilaccaps uninstall [options]
-lilaccaps transcribe <input> [options]
-lilaccaps embed <video> --subs <subtitle-file> [options]
-lilaccaps burnin <video> --subs <subtitle-file> [options]
+lilaccaps doctor [--fix]
+lilaccaps install [--fix]
+lilaccaps update [--skip-dependencies]
+lilaccaps status [--json]
+lilaccaps uninstall --yes
+lilaccaps transcribe <media> [--lang <code>] [--output <file.srt>]
+lilaccaps translate <file.srt> --to <language> [--append <bool>]
+lilaccaps burnin <video> --subs <file.srt> [--output <video>]
+lilaccaps watermark <video> (--text <text> | --image <path>) [--output <video>]
 ```
 
-Optional later expansion:
+Current capabilities:
 
-```text
-lilaccaps translate <subtitle-file> [options]
-```
+- local Whisper transcription with automatic or explicit language selection
+- Gemini subtitle translation while preserving cue indexes and timing
+- primary FFmpeg/libass burn-in plus an explicit ImageMagick overlay fallback
+- FFmpeg text/image watermarking plus ImageMagick conversion and text fallback
+- GitHub remote installation, release discovery, self-update, health checks, and owned uninstall
+- Homebrew dependency health, repair, and update support on macOS
+- OpenClaw generated skill integration and bootstrap documentation
 
-The initial implementation should focus on:
-1. `install`
-2. `status`
-3. `transcribe`
-4. `embed`
-5. `burnin`
+Soft-subtitle muxing (`embed`), `.vtt`, plain transcript output, speaker segmentation, and a combined
+download-to-caption wrapper are not implemented commands.
+
+## Design Rules
+
+- Keep `transcribe`, `translate`, `burnin`, and `watermark` as separate workflows.
+- Do not make `burnin` or `watermark` trigger transcription implicitly.
+- Keep command handlers thin and pipeline modules responsible for the actual work.
+- Report exact input/output paths and the selected renderer.
+- Keep primary and fallback renderers distinguishable in code and command output.
+- Reject output paths that alias any input and publish files atomically after successful work.
+- Use uniquely scoped temporary assets and clean them on both success and failure.
+- Treat recursive deletion, credentials, release installation, and external commands as security
+  boundaries.
+
+## Runtime Contract
+
+- Config: `~/.lilac/lilaccaps/lilaccaps.toml`
+- Runtime override: `LILACCAPS_HOME`
+- Models: `$LILACCAPS_HOME/models`
+- Temporary assets: `$LILACCAPS_HOME/tmp`
+- Ownership marker: `$LILACCAPS_HOME/.lilaccaps-runtime`
+- OpenClaw skill default: `~/.openclaw/skills/lilaccaps/SKILL.md`
+- Translation credential: exported `GEMINI_API_KEY`, then `$LILACCAPS_HOME/.env`
+
+Paths beginning with `~` are expanded after config parsing. Explicit environment values take
+precedence over file-based defaults.
 
 ## Architecture
 
-### 1. CLI Layer
-Responsibility:
-- parse commands and arguments
-- validate required inputs
-- dispatch to one workflow only
-- report outputs clearly
+- `src/commands`: argument-to-pipeline dispatch and structured command summaries
+- `src/pipelines`: one module per media workflow
+- `src/media.rs`: FFmpeg/FFprobe boundaries and media probing
+- `src/model.rs`: Whisper model resolution and atomic streaming download
+- `src/subtitles.rs`: SRT parsing and atomic serialization
+- `src/render.rs`: burn-in renderer selection and overlay implementation
+- `src/watermark.rs`: text/image watermark renderer selection
+- `src/runtime.rs`: dependencies, paths, temporary assets, ownership, and lifecycle safety
+- `src/config.rs`, `src/release.rs`, `src/integration.rs`: config migration, release discovery, and
+  OpenClaw integration
 
-This layer also owns:
-- config discovery
-- release/version inspection
-- environment validation
-- uninstall safety checks
+## Release Gate
 
-Suggested implementation:
-- Rust CLI as the primary executable
-- TS/Deno allowed for helper tooling or agent-facing orchestration where it is a better fit
+Every release must complete:
 
-### 2. Transcription Pipeline
-Responsibility:
-- media probe
-- optional audio extraction
-- transcription
-- subtitle normalization
-- `.srt` serialization
-
-This pipeline should be isolated from rendering concerns.
-
-### 3. Burn-In Rendering Pipeline
-Responsibility:
-- subtitle file validation
-- render configuration
-- video re-encode with burned-in subtitles
-
-This pipeline should assume subtitle files already exist.
-
-### 4. Subtitle Embedding Pipeline
-Responsibility:
-- subtitle file validation
-- container and codec compatibility checks
-- subtitle track muxing without burning subtitles into frames
-
-This pipeline should assume subtitle files already exist.
-
-### 5. Agent Orchestration Boundary
-Responsibility:
-- allow the main OpenClaw agent to delegate video/audio transcription work to a subagent when appropriate
-- keep the main agent focused on intent gathering and result reporting
-
-Delegation applies to transcription, not to redefining the `burnin` command.
-
-### 6. Install And Lifecycle Management
-Responsibility:
-- install the CLI globally
-- check for newer stable releases from GitHub
-- report environment health
-- remove installed assets cleanly
-
-Lifecycle commands should remain separate from media workflows.
-
-## Lifecycle Commands
-
-### `lilaccaps install`
-Purpose:
-- install the CLI globally
-
-Expected behavior:
-- install or place the binary in the usual Cargo location, typically `~/.cargo/bin`
-- initialize `lilaccaps.toml` if missing
-- initialize runtime home if missing
-- set up or guide agent skill integration
-- report final binary and config locations
-
-Primary path:
-- prefer a clean Rust-native install flow first
-
-Fallback:
-- if full automation is not reliable across environments, generate or print exact bootstrap steps separately
-
-### `lilaccaps update`
-Purpose:
-- update the installed CLI to the latest stable release from the GitHub repository
-
-Expected behavior:
-- detect current installed version
-- detect latest stable release
-- upgrade deterministically
-- preserve config and runtime state unless migration is explicitly needed
-
-This command should treat release discovery and upgrade as one lifecycle workflow, separate from subtitle features.
-
-### `lilaccaps status`
-Purpose:
-- report important runtime and installation information
-
-Expected output should include:
-- current installed version
-- latest available stable release
-- binary path
-- config file path
-- runtime home path
-- agent skill path
-- whether config is valid
-- whether required dependencies are missing
-- whether the installation is healthy
-
-Status should be a high-signal health report, not a verbose dump.
-
-### `lilaccaps uninstall`
-Purpose:
-- remove `lilaccaps` from disk completely
-
-Expected behavior:
-- remove installed binary
-- remove config file if owned by `lilaccaps`
-- remove runtime home
-- remove generated integration files if owned by `lilaccaps`
-- clearly warn before destructive deletion
-
-This command should be explicit and conservative about deleting user-managed paths.
-
-## Primary Implementation Order
-
-### Phase 1
-Deliver:
-- `lilaccaps` CLI skeleton
-- config discovery and `lilaccaps.toml`
-- runtime home resolution
-- `install` command contract
-- `status` command contract
-- `transcribe` command contract
-- `embed` command contract
-- `burnin` command contract
-- shared input/output path handling
-
-### Phase 2
-Deliver:
-- install bootstrap path
-- version inspection and release-check plumbing
-- environment validation in `status`
-- transcription pipeline to `.srt`
-- exact output path reporting
-- deterministic error handling
-
-### Phase 3
-Deliver:
-- `update` workflow
-- `uninstall` workflow
-- `embed` workflow
-- `burnin` rendering pipeline
-- render options that remain narrow and explicit
-
-### Phase 4
-Deliver:
-- agent delegation support for transcription
-- optional translation as a separate workflow
-
-## Fallback Strategy
-Fallback is a separate concern and should be implemented after the primary flow is stable.
-
-Possible fallback areas:
-- alternate transcription backend
-- alternate subtitle normalization path
-- alternate render backend
-
-Rules:
-- do not hide fallback selection inside the main happy path
-- do not mix primary and fallback logic in the same command branch
-- keep backend selection explicit in configuration or internal adapters
-
-## Clean Design Rules
-- Keep lifecycle commands separate from subtitle-processing commands
-- Keep `transcribe`, `embed`, and `burnin` as separate workflows with separate modules
-- Do not let `embed` call transcription internally
-- Do not let `burnin` call transcription internally
-- Prefer explicit artifacts over implicit side effects
-- Keep command semantics narrow
-- Report exact output paths
-- Keep primary path simple before adding fallback adapters
-- Favor small, composable modules over one large pipeline
-
-## Suggested Repository Shape
-Example only:
-
-```text
-src/
-  cli/
-  commands/
-    install.rs
-    update.rs
-    status.rs
-    uninstall.rs
-    transcribe.rs
-    embed.rs
-    burnin.rs
-  config/
-  runtime/
-  integration/
-  release/
-  pipelines/
-    transcribe/
-    embed/
-    burnin/
-  media/
-  subtitles/
-  render/
-  errors/
+```bash
+cargo fmt --all --check
+shellcheck install.sh
+actionlint
+gitleaks detect --source . --no-banner --redact
+cargo clippy --all-targets --all-features --locked -- -D warnings
+cargo test --all-targets --all-features --locked
+cargo audit
+cargo build --release --locked
 ```
 
-If TS/Deno is introduced, keep it behind a clean boundary, for example:
+Changes to media pipelines also require disposable end-to-end FFmpeg tests and `ffprobe` validation.
+Release publication happens only after the pushed commit passes GitHub Actions.
 
-```text
-tools/
-  agent/
-  transcription/
-```
+## Roadmap
 
-## Output Contract
-Every successful command should report:
-- input path used
-- output path produced
-- output type produced
+Priorities are driven by concrete user workflows rather than command count:
 
-Examples:
-- initialized `lilaccaps.toml`
-- installed binary in `~/.cargo/bin`
-- generated `.srt`
-- embedded subtitle video
-- burned-in `.mp4`
+1. Add model integrity metadata or checksums without buffering downloads in memory.
+2. Batch very large translation jobs with deterministic cue-count validation per batch.
+3. Evaluate soft-subtitle muxing as a separate `embed` command with container-aware codecs.
+4. Evaluate `.vtt` and plain transcript outputs without weakening the current SRT contract.
+5. Add cross-platform package-manager adapters only behind the existing dependency interface.
 
-## Non-Goals For Initial Delivery
-- combining generation and burn-in into one hidden workflow
-- overloading one command with multiple responsibilities
-- mixing fallback engines into the primary control path
-- broad convenience wrappers before the core flows are reliable
-
-## Immediate Next Step
-Build the `lilaccaps` CLI skeleton around first-class commands:
-- `install`
-- `status`
-- `transcribe`
-- `embed`
-- `burnin`
-
-Then implement `.srt` generation first, followed by embed-only output and render-only burn-in, with `update` and `uninstall` added as separate lifecycle workflows.
+Any convenience orchestration should compose existing commands and preserve their standalone
+contracts.

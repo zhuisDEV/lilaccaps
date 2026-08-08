@@ -1,5 +1,6 @@
 use std::env;
 use std::path::Path;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use reqwest::blocking::Client;
@@ -54,13 +55,20 @@ pub fn translate_lines(
     target_language: &str,
     lines: &[String],
 ) -> Result<Vec<String>> {
-    load_dotenv(runtime_home);
+    if env::var_os(GEMINI_API_KEY_ENV).is_none() {
+        load_dotenv(runtime_home)?;
+    }
     let api_key = env::var(GEMINI_API_KEY_ENV).with_context(|| {
         format!(
             "{GEMINI_API_KEY_ENV} is not set. Add it to your environment or {}/.env.",
             runtime_home.display()
         )
     })?;
+    let api_key = api_key.trim();
+    if api_key.is_empty() {
+        bail!("{GEMINI_API_KEY_ENV} is set but empty");
+    }
+    validate_model_name(model)?;
 
     if lines.is_empty() {
         return Ok(Vec::new());
@@ -68,9 +76,11 @@ pub fn translate_lines(
 
     let client = Client::builder()
         .user_agent(format!("lilaccaps/{}", env!("CARGO_PKG_VERSION")))
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(120))
         .build()
         .context("failed to construct Gemini translation client")?;
-    let url = format!("{GEMINI_API_BASE}/{model}:generateContent?key={api_key}");
+    let url = format!("{GEMINI_API_BASE}/{model}:generateContent");
 
     let request = GenerateContentRequest {
         system_instruction: Content {
@@ -80,7 +90,7 @@ pub fn translate_lines(
         },
         contents: vec![Content {
             parts: vec![Part {
-                text: build_translation_prompt(target_language, lines),
+                text: build_translation_prompt(target_language, lines)?,
             }],
         }],
         generation_config: GenerationConfig {
@@ -90,6 +100,7 @@ pub fn translate_lines(
 
     let response = client
         .post(url)
+        .header("x-goog-api-key", api_key)
         .json(&request)
         .send()
         .context("failed to call Gemini translation API")?
@@ -116,26 +127,66 @@ pub fn translate_lines(
         );
     }
 
-    Ok(translations
+    translations
         .translations
         .into_iter()
-        .map(|line| line.trim().to_string())
-        .collect())
+        .enumerate()
+        .map(|(index, line)| {
+            let line = line.trim().to_string();
+            if line.is_empty() {
+                bail!(
+                    "Gemini returned an empty translation for subtitle line {}",
+                    index + 1
+                );
+            }
+            Ok(line)
+        })
+        .collect()
 }
 
-fn load_dotenv(runtime_home: &Path) {
+fn load_dotenv(runtime_home: &Path) -> Result<()> {
     let runtime_env = runtime_home.join(".env");
     if runtime_env.exists() {
-        let _ = dotenvy::from_path_override(runtime_env);
-        return;
+        dotenvy::from_path(&runtime_env)
+            .with_context(|| format!("failed to load {}", runtime_env.display()))?;
     }
-
-    let _ = dotenvy::dotenv_override();
+    Ok(())
 }
 
-fn build_translation_prompt(target_language: &str, lines: &[String]) -> String {
-    let json_lines = serde_json::to_string(lines).expect("subtitle lines should serialize");
-    format!(
+fn validate_model_name(model: &str) -> Result<()> {
+    if model.is_empty()
+        || !model.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+        })
+    {
+        bail!("invalid Gemini model name: {model}");
+    }
+    Ok(())
+}
+
+fn build_translation_prompt(target_language: &str, lines: &[String]) -> Result<String> {
+    let json_lines = serde_json::to_string(lines).context("failed to encode subtitle lines")?;
+    Ok(format!(
         "Translate each subtitle line into {target_language}. Keep the meaning concise and subtitle-friendly. Return JSON only with this exact shape: {{\"translations\": [\"...\"]}}. Input lines: {json_lines}"
-    )
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_translation_prompt, validate_model_name};
+
+    #[test]
+    fn validates_gemini_model_name() {
+        assert!(validate_model_name("gemini-3.1-flash-lite").is_ok());
+        assert!(validate_model_name("gemini/latest?key=secret").is_err());
+        assert!(validate_model_name("").is_err());
+    }
+
+    #[test]
+    fn prompt_serializes_lines_as_json() {
+        let prompt = build_translation_prompt("ja", &["hello \"world\"".to_string()])
+            .expect("prompt should build");
+        assert!(prompt.contains("hello \\\"world\\\""));
+        assert!(prompt.contains("into ja"));
+    }
 }

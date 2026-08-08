@@ -1,4 +1,3 @@
-use std::fs;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Once;
@@ -12,7 +11,9 @@ use whisper_rs::{
 use crate::config::load_or_init_config;
 use crate::media::{ensure_ffmpeg_available, extract_audio_to_wav};
 use crate::model::ensure_model_downloaded;
-use crate::runtime::{ensure_dir, tmp_dir};
+use crate::runtime::{
+    ScopedTempPath, ensure_dir, ensure_parent_dir, paths_refer_to_same_file, tmp_dir,
+};
 use crate::subtitles::{SubtitleCue, write_srt_file};
 
 static WHISPER_LOGGING_HOOKS: Once = Once::new();
@@ -110,26 +111,38 @@ pub fn run(
     ensure_dir(&tmp_dir(&loaded.paths.runtime_home))?;
 
     let output = output.unwrap_or_else(|| default_output_path(&input));
-    if let Some(parent) = output.parent() {
-        fs::create_dir_all(parent).with_context(|| {
-            format!(
-                "failed to create output directory for transcription {}",
-                output.display()
-            )
-        })?;
+    if paths_refer_to_same_file(&input, &output)? {
+        bail!(
+            "transcription output must be different from input media: {}",
+            input.display()
+        );
     }
+    ensure_parent_dir(&output).with_context(|| {
+        format!(
+            "failed to create output directory for transcription {}",
+            output.display()
+        )
+    })?;
 
     let model_path = ensure_model_downloaded(&loaded.paths, &loaded.config)?;
-    let audio_path = temp_audio_path(&loaded.paths.runtime_home, &input);
+    let audio_prefix = input
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("transcribe-audio");
+    let audio = ScopedTempPath::file(
+        &tmp_dir(&loaded.paths.runtime_home),
+        audio_prefix,
+        Some("wav"),
+    );
     let language = resolve_language(lang.as_deref(), Some(&loaded.config.transcribe.language))?;
-    extract_audio_to_wav(&input, &audio_path)?;
+    extract_audio_to_wav(&input, audio.path())?;
     let (
         cues,
         effective_language,
         fallback_language_used,
         fallback_decoding_used,
         decoding_strategy,
-    ) = transcribe_to_cues(&model_path, &audio_path, language.as_deref())?;
+    ) = transcribe_to_cues(&model_path, audio.path(), language.as_deref())?;
     write_srt_file(&output, &cues)?;
 
     Ok(TranscribeOutput {
@@ -150,14 +163,6 @@ fn default_output_path(input: &Path) -> PathBuf {
         .and_then(|item| item.to_str())
         .unwrap_or("transcript");
     input.with_file_name(format!("{stem}.srt"))
-}
-
-fn temp_audio_path(runtime_home: &Path, input: &Path) -> PathBuf {
-    let stem = input
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or("input");
-    tmp_dir(runtime_home).join(format!("{stem}.mono16k.wav"))
 }
 
 fn transcribe_to_cues(
@@ -359,8 +364,15 @@ fn transcribe_attempt(
         }
 
         let offset_cs = samples_to_centiseconds(chunk.start, sample_rate);
-        let (mut chunk_cues, chunk_diagnostics) =
-            transcribe_chunk(ctx, &audio[chunk.clone()], language, strategy, offset_cs)?;
+        let duration_cs = samples_to_centiseconds(chunk.len(), sample_rate);
+        let (mut chunk_cues, chunk_diagnostics) = transcribe_chunk(
+            ctx,
+            &audio[chunk.clone()],
+            language,
+            strategy,
+            offset_cs,
+            duration_cs,
+        )?;
         segment_count += chunk_diagnostics.segment_count;
         non_empty_segments += chunk_diagnostics.non_empty_segments;
         cues.append(&mut chunk_cues);
@@ -388,6 +400,7 @@ fn transcribe_chunk(
     language: Option<&str>,
     strategy: DecodeStrategy,
     offset_cs: i64,
+    duration_cs: i64,
 ) -> Result<(Vec<SubtitleCue>, AttemptDiagnostics)> {
     let mut state = ctx
         .create_state()
@@ -409,13 +422,13 @@ fn transcribe_chunk(
     // `detect_language=true` makes whisper.cpp return after detection without transcribing.
     // For actual transcription we always pass an explicit language, including auto-detected ones.
     params.set_detect_language(false);
-    params.set_n_threads(num_cpus::get_physical() as i32);
+    params.set_n_threads(num_cpus::get_physical().max(1) as i32);
 
     state
         .full(params, audio)
         .context("failed to transcribe audio with whisper")?;
 
-    collect_cues(&state, language, strategy, offset_cs)
+    collect_cues(&state, language, strategy, offset_cs, duration_cs)
 }
 
 fn audio_chunks(
@@ -445,6 +458,7 @@ fn collect_cues(
     language: Option<&str>,
     strategy: DecodeStrategy,
     offset_cs: i64,
+    duration_cs: i64,
 ) -> Result<(Vec<SubtitleCue>, AttemptDiagnostics)> {
     let mut cues = Vec::new();
     let mut segment_count = 0usize;
@@ -459,12 +473,19 @@ fn collect_cues(
             continue;
         }
 
-        cues.push(SubtitleCue {
-            index: index + 1,
-            start_cs: segment.start_timestamp() + offset_cs,
-            end_cs: segment.end_timestamp() + offset_cs,
-            text,
-        });
+        if let Some((start_cs, end_cs)) = clamp_segment_to_chunk(
+            segment.start_timestamp(),
+            segment.end_timestamp(),
+            offset_cs,
+            duration_cs,
+        ) {
+            cues.push(SubtitleCue {
+                index: index + 1,
+                start_cs,
+                end_cs,
+                text,
+            });
+        }
     }
 
     let non_empty_segments = cues.len();
@@ -478,6 +499,22 @@ fn collect_cues(
             non_empty_segments,
         },
     ))
+}
+
+fn clamp_segment_to_chunk(
+    segment_start_cs: i64,
+    segment_end_cs: i64,
+    chunk_offset_cs: i64,
+    chunk_duration_cs: i64,
+) -> Option<(i64, i64)> {
+    let chunk_end_cs = chunk_offset_cs.saturating_add(chunk_duration_cs.max(0));
+    let start_cs = chunk_offset_cs
+        .saturating_add(segment_start_cs)
+        .clamp(chunk_offset_cs, chunk_end_cs);
+    let end_cs = chunk_offset_cs
+        .saturating_add(segment_end_cs)
+        .clamp(chunk_offset_cs, chunk_end_cs);
+    (end_cs > start_cs).then_some((start_cs, end_cs))
 }
 
 fn resolve_language(cli_lang: Option<&str>, config_lang: Option<&str>) -> Result<Option<String>> {
@@ -503,7 +540,8 @@ fn resolve_language(cli_lang: Option<&str>, config_lang: Option<&str>) -> Result
 mod tests {
     use super::{
         AttemptDiagnostics, AttemptPlan, DecodeStrategy, audio_chunks, build_attempts,
-        detected_language_attempts, detection_audio, resolve_language, samples_to_centiseconds,
+        clamp_segment_to_chunk, detected_language_attempts, detection_audio, resolve_language,
+        samples_to_centiseconds,
     };
 
     #[test]
@@ -648,5 +686,18 @@ mod tests {
     fn samples_convert_to_centiseconds() {
         assert_eq!(samples_to_centiseconds(16_000, 16_000), 100);
         assert_eq!(samples_to_centiseconds(24_000, 16_000), 150);
+    }
+
+    #[test]
+    fn segment_timestamps_are_clamped_to_chunk_boundaries() {
+        assert_eq!(
+            clamp_segment_to_chunk(2_900, 3_100, 3_000, 3_000),
+            Some((5_900, 6_000))
+        );
+        assert_eq!(clamp_segment_to_chunk(3_000, 3_100, 3_000, 3_000), None);
+        assert_eq!(
+            clamp_segment_to_chunk(-100, 200, 3_000, 3_000),
+            Some((3_000, 3_200))
+        );
     }
 }
