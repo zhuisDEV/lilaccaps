@@ -57,9 +57,79 @@ pub struct ReleaseConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranscribeConfig {
+    #[serde(default)]
+    pub engine: TranscribeEngine,
     #[serde(default = "default_transcribe_language")]
     pub language: String,
+    #[serde(default)]
+    pub segmentation: TranscribeSegmentationConfig,
+    #[serde(default)]
+    pub cues: TranscribeCueConfig,
+    #[serde(default)]
+    pub cleanup: TranscribeCleanupConfig,
     pub model: ModelConfig,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum TranscribeEngine {
+    #[default]
+    WhisperRs,
+    FasterWhisper,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TranscribeSegmentationConfig {
+    #[serde(default)]
+    pub mode: TranscribeSegmentationMode,
+    #[serde(default = "default_transcribe_chunk_seconds")]
+    pub chunk_seconds: u64,
+    #[serde(default = "default_transcribe_overlap_seconds")]
+    pub overlap_seconds: u64,
+    #[serde(default = "default_transcribe_min_speech_ms")]
+    pub min_speech_ms: u64,
+    #[serde(default = "default_transcribe_min_silence_ms")]
+    pub min_silence_ms: u64,
+    #[serde(default = "default_transcribe_padding_ms")]
+    pub padding_ms: u64,
+    #[serde(default = "default_transcribe_max_window_seconds")]
+    pub max_window_seconds: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TranscribeSegmentationMode {
+    #[default]
+    Speech,
+    Fixed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TranscribeCueConfig {
+    #[serde(default = "default_transcribe_min_duration_ms")]
+    pub min_duration_ms: u64,
+    #[serde(default = "default_transcribe_max_duration_ms")]
+    pub max_duration_ms: u64,
+    #[serde(default = "default_transcribe_end_padding_ms")]
+    pub end_padding_ms: u64,
+    #[serde(default = "default_transcribe_pause_split_ms")]
+    pub pause_split_ms: u64,
+    #[serde(default = "default_transcribe_max_chars_per_line")]
+    pub max_chars_per_line: usize,
+    #[serde(default = "default_transcribe_max_cjk_chars_per_line")]
+    pub max_cjk_chars_per_line: usize,
+    #[serde(default = "default_transcribe_max_lines")]
+    pub max_lines: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TranscribeCleanupConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_transcribe_cleanup_command")]
+    pub command: String,
+    #[serde(default = "default_transcribe_cleanup_model")]
+    pub model: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -185,7 +255,11 @@ pub fn default_config() -> Result<Config> {
         agent: AgentConfig { skill_path },
         release: ReleaseConfig { github_repo },
         transcribe: TranscribeConfig {
+            engine: TranscribeEngine::default(),
             language: default_transcribe_language(),
+            segmentation: TranscribeSegmentationConfig::default(),
+            cues: TranscribeCueConfig::default(),
+            cleanup: TranscribeCleanupConfig::default(),
             model: ModelConfig {
                 id: "base".to_string(),
                 path: None,
@@ -210,6 +284,66 @@ pub fn default_runtime_home() -> Result<PathBuf> {
 
 pub fn default_transcribe_language() -> String {
     "auto".to_string()
+}
+
+pub fn default_transcribe_chunk_seconds() -> u64 {
+    30
+}
+
+pub fn default_transcribe_overlap_seconds() -> u64 {
+    2
+}
+
+pub fn default_transcribe_min_speech_ms() -> u64 {
+    400
+}
+
+pub fn default_transcribe_min_silence_ms() -> u64 {
+    350
+}
+
+pub fn default_transcribe_padding_ms() -> u64 {
+    300
+}
+
+pub fn default_transcribe_max_window_seconds() -> u64 {
+    30
+}
+
+pub fn default_transcribe_min_duration_ms() -> u64 {
+    800
+}
+
+pub fn default_transcribe_max_duration_ms() -> u64 {
+    6_000
+}
+
+pub fn default_transcribe_end_padding_ms() -> u64 {
+    150
+}
+
+pub fn default_transcribe_pause_split_ms() -> u64 {
+    500
+}
+
+pub fn default_transcribe_max_chars_per_line() -> usize {
+    42
+}
+
+pub fn default_transcribe_max_cjk_chars_per_line() -> usize {
+    18
+}
+
+pub fn default_transcribe_max_lines() -> usize {
+    2
+}
+
+pub fn default_transcribe_cleanup_command() -> String {
+    "codex".to_string()
+}
+
+pub fn default_transcribe_cleanup_model() -> String {
+    "gpt-5.6-terra".to_string()
 }
 
 pub fn default_burnin_font() -> String {
@@ -262,6 +396,44 @@ impl Default for BurninConfig {
             advanced_styling: default_burnin_advanced_styling(),
             outline: BurninOutlineConfig::default(),
             styles: HashMap::new(),
+        }
+    }
+}
+
+impl Default for TranscribeSegmentationConfig {
+    fn default() -> Self {
+        Self {
+            mode: TranscribeSegmentationMode::default(),
+            chunk_seconds: default_transcribe_chunk_seconds(),
+            overlap_seconds: default_transcribe_overlap_seconds(),
+            min_speech_ms: default_transcribe_min_speech_ms(),
+            min_silence_ms: default_transcribe_min_silence_ms(),
+            padding_ms: default_transcribe_padding_ms(),
+            max_window_seconds: default_transcribe_max_window_seconds(),
+        }
+    }
+}
+
+impl Default for TranscribeCueConfig {
+    fn default() -> Self {
+        Self {
+            min_duration_ms: default_transcribe_min_duration_ms(),
+            max_duration_ms: default_transcribe_max_duration_ms(),
+            end_padding_ms: default_transcribe_end_padding_ms(),
+            pause_split_ms: default_transcribe_pause_split_ms(),
+            max_chars_per_line: default_transcribe_max_chars_per_line(),
+            max_cjk_chars_per_line: default_transcribe_max_cjk_chars_per_line(),
+            max_lines: default_transcribe_max_lines(),
+        }
+    }
+}
+
+impl Default for TranscribeCleanupConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            command: default_transcribe_cleanup_command(),
+            model: default_transcribe_cleanup_model(),
         }
     }
 }
@@ -358,6 +530,90 @@ fn resolve_config_paths(config: &mut Config) -> Result<()> {
             model_path.display()
         );
     }
+    validate_transcribe_config(&config.transcribe)?;
+    Ok(())
+}
+
+pub fn validate_transcribe_config(config: &TranscribeConfig) -> Result<()> {
+    match config.engine {
+        TranscribeEngine::WhisperRs => {
+            if !matches!(
+                config.model.id.as_str(),
+                "tiny"
+                    | "base"
+                    | "small"
+                    | "medium"
+                    | "tiny.en"
+                    | "base.en"
+                    | "small.en"
+                    | "medium.en"
+            ) {
+                anyhow::bail!(
+                    "unsupported whisper-rs model id: {}; use tiny, base, small, medium, or an .en variant",
+                    config.model.id
+                );
+            }
+        }
+        TranscribeEngine::FasterWhisper => {
+            if config.model.path.is_none()
+                && !matches!(config.model.id.as_str(), "large-v3" | "large-v3-turbo")
+            {
+                anyhow::bail!(
+                    "unsupported faster-whisper model id: {}; use large-v3 or large-v3-turbo",
+                    config.model.id
+                );
+            }
+        }
+    }
+    if config.cleanup.enabled {
+        if config.cleanup.command.trim().is_empty() {
+            anyhow::bail!("transcribe.cleanup.command must not be empty when cleanup is enabled");
+        }
+        let cleanup_command = Path::new(&config.cleanup.command);
+        if cleanup_command.components().count() > 1 && !cleanup_command.is_absolute() {
+            anyhow::bail!(
+                "transcribe.cleanup.command must be an executable name or absolute path: {}",
+                config.cleanup.command
+            );
+        }
+        if config.cleanup.model.trim().is_empty() {
+            anyhow::bail!("transcribe.cleanup.model must not be empty when cleanup is enabled");
+        }
+    }
+    let segmentation = &config.segmentation;
+    if segmentation.chunk_seconds == 0 {
+        anyhow::bail!("transcribe.segmentation.chunk_seconds must be greater than zero");
+    }
+    if segmentation.overlap_seconds >= segmentation.chunk_seconds {
+        anyhow::bail!("transcribe.segmentation.overlap_seconds must be smaller than chunk_seconds");
+    }
+    if segmentation.max_window_seconds == 0 {
+        anyhow::bail!("transcribe.segmentation.max_window_seconds must be greater than zero");
+    }
+    if segmentation.overlap_seconds >= segmentation.max_window_seconds {
+        anyhow::bail!(
+            "transcribe.segmentation.overlap_seconds must be smaller than max_window_seconds"
+        );
+    }
+    if segmentation.min_speech_ms == 0 || segmentation.min_silence_ms == 0 {
+        anyhow::bail!("transcribe speech and silence durations must be greater than zero");
+    }
+
+    let cues = &config.cues;
+    if cues.min_duration_ms == 0 {
+        anyhow::bail!("transcribe.cues.min_duration_ms must be greater than zero");
+    }
+    if cues.max_duration_ms < cues.min_duration_ms {
+        anyhow::bail!(
+            "transcribe.cues.max_duration_ms must be greater than or equal to min_duration_ms"
+        );
+    }
+    if cues.pause_split_ms == 0 {
+        anyhow::bail!("transcribe.cues.pause_split_ms must be greater than zero");
+    }
+    if cues.max_chars_per_line == 0 || cues.max_cjk_chars_per_line == 0 || cues.max_lines == 0 {
+        anyhow::bail!("transcribe cue line limits must be greater than zero");
+    }
     Ok(())
 }
 
@@ -367,7 +623,7 @@ mod tests {
 
     use super::{
         Config, default_config, default_config_path, default_runtime_home, expand_home,
-        migrate_managed_defaults, resolve_config_paths,
+        migrate_managed_defaults, resolve_config_paths, validate_transcribe_config,
     };
 
     #[test]
@@ -388,6 +644,24 @@ mod tests {
     fn default_config_uses_auto_language_detection() {
         let config = default_config().expect("default config should build");
         assert_eq!(config.transcribe.language, "auto");
+        assert_eq!(config.transcribe.engine, super::TranscribeEngine::WhisperRs);
+        assert_eq!(config.transcribe.segmentation.chunk_seconds, 30);
+        assert_eq!(config.transcribe.segmentation.overlap_seconds, 2);
+        assert_eq!(
+            config.transcribe.segmentation.mode,
+            super::TranscribeSegmentationMode::Speech
+        );
+        assert_eq!(config.transcribe.segmentation.min_speech_ms, 400);
+        assert_eq!(config.transcribe.segmentation.min_silence_ms, 350);
+        assert_eq!(config.transcribe.segmentation.padding_ms, 300);
+        assert_eq!(config.transcribe.segmentation.max_window_seconds, 30);
+        assert_eq!(config.transcribe.cues.min_duration_ms, 800);
+        assert_eq!(config.transcribe.cues.max_duration_ms, 6_000);
+        assert_eq!(config.transcribe.cues.end_padding_ms, 150);
+        assert_eq!(config.transcribe.cues.pause_split_ms, 500);
+        assert!(!config.transcribe.cleanup.enabled);
+        assert_eq!(config.transcribe.cleanup.command, "codex");
+        assert_eq!(config.transcribe.cleanup.model, "gpt-5.6-terra");
         assert_eq!(config.burnin.font, "auto");
         assert_eq!(config.burnin.colour, "auto");
         assert_eq!(config.burnin.size, 0);
@@ -439,6 +713,18 @@ id = "base"
 
         let config: Config = toml::from_str(raw).expect("older config should parse");
         assert_eq!(config.transcribe.language, "auto");
+        assert_eq!(config.transcribe.engine, super::TranscribeEngine::WhisperRs);
+        assert_eq!(config.transcribe.segmentation.chunk_seconds, 30);
+        assert_eq!(config.transcribe.segmentation.overlap_seconds, 2);
+        assert_eq!(
+            config.transcribe.segmentation.mode,
+            super::TranscribeSegmentationMode::Speech
+        );
+        assert_eq!(config.transcribe.cues.max_chars_per_line, 42);
+        assert_eq!(config.transcribe.cues.max_cjk_chars_per_line, 18);
+        assert_eq!(config.transcribe.cues.max_lines, 2);
+        assert_eq!(config.transcribe.cues.pause_split_ms, 500);
+        assert!(!config.transcribe.cleanup.enabled);
         assert_eq!(config.burnin.font, "auto");
         assert_eq!(config.burnin.colour, "auto");
         assert_eq!(config.burnin.size, 0);
@@ -455,13 +741,18 @@ id = "base"
     }
 
     #[test]
-    fn default_config_renders_outline_section() {
+    fn default_config_renders_managed_sections() {
         let config = default_config().expect("default config should build");
         let rendered = toml::to_string_pretty(&config).expect("default config should render");
         assert!(rendered.contains("[burnin.outline]"));
         assert!(rendered.contains("enabled = true"));
         assert!(rendered.contains("colour = \"black\""));
         assert!(rendered.contains("width = 2"));
+        assert!(rendered.contains("[transcribe.segmentation]"));
+        assert!(rendered.contains("mode = \"speech\""));
+        assert!(rendered.contains("min_silence_ms = 350"));
+        assert!(rendered.contains("[transcribe.cues]"));
+        assert!(rendered.contains("[transcribe.cleanup]"));
     }
 
     #[test]
@@ -489,6 +780,52 @@ id = "base"
             error
                 .to_string()
                 .contains("runtime.home must be an absolute path")
+        );
+    }
+
+    #[test]
+    fn rejects_overlap_that_consumes_the_entire_chunk() {
+        let mut config = default_config().expect("default config should build");
+        config.transcribe.segmentation.overlap_seconds = 30;
+
+        let error = validate_transcribe_config(&config.transcribe)
+            .expect_err("invalid overlap should be rejected");
+        assert!(error.to_string().contains("overlap_seconds"));
+    }
+
+    #[test]
+    fn rejects_inverted_cue_duration_limits() {
+        let mut config = default_config().expect("default config should build");
+        config.transcribe.cues.min_duration_ms = 2_000;
+        config.transcribe.cues.max_duration_ms = 1_000;
+
+        let error = validate_transcribe_config(&config.transcribe)
+            .expect_err("inverted cue durations should be rejected");
+        assert!(error.to_string().contains("max_duration_ms"));
+    }
+
+    #[test]
+    fn rejects_zero_pause_split_threshold() {
+        let mut config = default_config().expect("default config should build");
+        config.transcribe.cues.pause_split_ms = 0;
+
+        let error = validate_transcribe_config(&config.transcribe)
+            .expect_err("zero pause threshold should be rejected");
+        assert!(error.to_string().contains("pause_split_ms"));
+    }
+
+    #[test]
+    fn rejects_relative_cleanup_command_paths() {
+        let mut config = default_config().expect("default config should build");
+        config.transcribe.cleanup.enabled = true;
+        config.transcribe.cleanup.command = "tools/codex".to_string();
+
+        let error = validate_transcribe_config(&config.transcribe)
+            .expect_err("relative cleanup command path should be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("executable name or absolute path")
         );
     }
 }

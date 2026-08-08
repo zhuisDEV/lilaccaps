@@ -4,20 +4,27 @@ use std::fs;
 use anyhow::{Context, Result, bail};
 
 use crate::cli::InstallArgs;
-use crate::config::{LoadedConfig, load_or_init_config};
+use crate::config::{LoadedConfig, TranscribeEngine, load_or_init_config};
+use crate::faster_whisper;
 use crate::integration::{ensure_skill_file, write_bootstrap_markdown};
 use crate::model::ensure_model_downloaded;
 use crate::runtime::{
-    cargo_bin_dir, collect_doctor_report, current_executable, ensure_dir, ensure_runtime_marker,
-    fix_dependencies_with_brew, install_binary_path, models_dir, tmp_dir,
+    cargo_bin_dir, collect_doctor_report_for_config, current_executable, ensure_cleanup_command,
+    ensure_dir, ensure_runtime_marker, fix_dependencies_with_brew, install_binary_path, models_dir,
+    tmp_dir,
 };
 
 pub fn run(args: InstallArgs) -> Result<()> {
-    let mut report = collect_doctor_report();
+    let LoadedConfig {
+        paths,
+        config,
+        created,
+    } = load_or_init_config(args.config_path)?;
+    let mut report = collect_doctor_report_for_config(&config);
     let mut fixed_packages = Vec::new();
     if args.fix && !report.brew_packages.is_empty() {
         fixed_packages = fix_dependencies_with_brew(&report)?;
-        report = collect_doctor_report();
+        report = collect_doctor_report_for_config(&config);
     }
 
     if !report.missing_commands.is_empty() {
@@ -39,12 +46,6 @@ pub fn run(args: InstallArgs) -> Result<()> {
         );
     }
 
-    let LoadedConfig {
-        paths,
-        config,
-        created,
-    } = load_or_init_config(args.config_path)?;
-
     ensure_dir(&paths.runtime_home)?;
     ensure_runtime_marker(&paths.runtime_home)?;
     ensure_dir(&models_dir(&paths.runtime_home))?;
@@ -54,6 +55,12 @@ pub fn run(args: InstallArgs) -> Result<()> {
     let bootstrap_path = write_bootstrap_markdown(&paths, &config)?;
     let binary_path = install_binary()?;
     let model_path = ensure_model_downloaded(&paths, &config)?;
+    if config.transcribe.engine == TranscribeEngine::FasterWhisper {
+        faster_whisper::check(&paths.runtime_home)?;
+    }
+    if config.transcribe.cleanup.enabled {
+        ensure_cleanup_command(&config.transcribe.cleanup.command)?;
+    }
     let skill_path = ensure_skill_file(&config)?;
 
     println!("installed = true");

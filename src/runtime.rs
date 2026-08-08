@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 
-use crate::config::{Config, ConfigPaths};
+use crate::config::{Config, ConfigPaths, TranscribeEngine};
 
 #[derive(Debug, Clone, Copy)]
 pub struct CommandDependency {
@@ -58,6 +58,22 @@ pub const MAGICK_DEPENDENCY: CommandDependency = CommandDependency {
     version_args: &["--version"],
 };
 
+pub const UV_DEPENDENCY: CommandDependency = CommandDependency {
+    name: "uv",
+    purpose: "run the optional faster-whisper transcription engine",
+    install_hint: "Install uv from https://docs.astral.sh/uv or on macOS: brew install uv",
+    brew_package: Some("uv"),
+    version_args: &["--version"],
+};
+
+pub const CODEX_DEPENDENCY: CommandDependency = CommandDependency {
+    name: "codex",
+    purpose: "run optional text-only subtitle cleanup",
+    install_hint: "Install and authenticate the Codex CLI, then rerun lilaccaps doctor",
+    brew_package: None,
+    version_args: &["--version"],
+};
+
 const BREW_DEPENDENCY: CommandDependency = CommandDependency {
     name: "brew",
     purpose: "install missing lilaccaps prerequisites automatically",
@@ -88,6 +104,10 @@ pub struct RuntimeHealth {
     pub ffprobe_available: bool,
     pub cmake_available: bool,
     pub magick_available: bool,
+    pub uv_available: bool,
+    pub codex_available: bool,
+    pub transcription_engine_ready: bool,
+    pub cleanup_ready: bool,
     pub build_ready: bool,
     pub fallback_renderer_ready: bool,
     pub model_ready: bool,
@@ -380,11 +400,50 @@ pub fn command_exists(name: &str) -> bool {
 }
 
 pub fn command_path(name: &str) -> Option<PathBuf> {
+    let explicit = Path::new(name);
+    if explicit.components().count() > 1 {
+        return explicit.is_file().then(|| explicit.to_path_buf());
+    }
     env::var_os("PATH").and_then(|path| {
         env::split_paths(&path)
             .map(|dir| dir.join(name))
             .find(|candidate| candidate.is_file())
     })
+}
+
+pub fn ensure_cleanup_command(command: &str) -> Result<()> {
+    cleanup_command_health(command).map_err(anyhow::Error::msg)
+}
+
+fn cleanup_command_ready(command: &str) -> bool {
+    cleanup_command_health(command).is_ok()
+}
+
+fn cleanup_command_health(command: &str) -> std::result::Result<(), String> {
+    let Some(path) = command_path(command) else {
+        return Err(format!(
+            "cleanup command `{command}` was not found; install Codex CLI or update transcribe.cleanup.command"
+        ));
+    };
+    let output = Command::new(&path)
+        .arg("--version")
+        .output()
+        .map_err(|error| {
+            format!(
+                "cleanup command `{}` could not start: {error}",
+                path.display()
+            )
+        })?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let detail = first_output_line(&output.stderr)
+        .or_else(|| first_output_line(&output.stdout))
+        .unwrap_or_else(|| format!("exited with status {}", output.status));
+    Err(format!(
+        "cleanup command `{}` failed its health check: {detail}",
+        path.display()
+    ))
 }
 
 pub fn ensure_dependency(dep: CommandDependency) -> Result<()> {
@@ -531,6 +590,54 @@ pub fn collect_doctor_report() -> DoctorReport {
     }
 }
 
+pub fn collect_doctor_report_for_config(config: &Config) -> DoctorReport {
+    let mut report = collect_doctor_report();
+    let optional = [UV_DEPENDENCY, CODEX_DEPENDENCY];
+    for dependency in optional {
+        let status = probe_dependency(dependency);
+        let required = match dependency.name {
+            "uv" => config.transcribe.engine == TranscribeEngine::FasterWhisper,
+            "codex" => {
+                config.transcribe.cleanup.enabled && config.transcribe.cleanup.command == "codex"
+            }
+            _ => false,
+        };
+        if required && !status.healthy {
+            report.missing_commands.push(dependency.name.to_string());
+            report.advisories.push(if let Some(error) = &status.error {
+                format!(
+                    "{} was found but failed its health check: {}. {}",
+                    dependency.name, error, dependency.install_hint
+                )
+            } else {
+                format!(
+                    "{} is required to {} but was not found on PATH. {}",
+                    dependency.name, dependency.purpose, dependency.install_hint
+                )
+            });
+            if let Some(package) = dependency.brew_package
+                && !report.brew_packages.iter().any(|item| item == package)
+            {
+                report.brew_packages.push(package.to_string());
+            }
+        }
+        report.statuses.push(status);
+    }
+    if config.transcribe.cleanup.enabled
+        && config.transcribe.cleanup.command != "codex"
+        && let Err(error) = cleanup_command_health(&config.transcribe.cleanup.command)
+    {
+        report
+            .missing_commands
+            .push(config.transcribe.cleanup.command.clone());
+        report.advisories.push(error);
+    }
+    report.can_fix_with_brew = cfg!(target_os = "macos")
+        && command_exists(BREW_DEPENDENCY.name)
+        && !report.brew_packages.is_empty();
+    report
+}
+
 pub fn fix_dependencies_with_brew(report: &DoctorReport) -> Result<Vec<String>> {
     if report.brew_packages.is_empty() {
         return Ok(Vec::new());
@@ -651,12 +758,23 @@ pub fn detect_runtime_health(paths: &ConfigPaths, config: &Config) -> RuntimeHea
     let ffprobe_available = probe_dependency(FFPROBE_DEPENDENCY).healthy;
     let cmake_available = probe_dependency(CMAKE_DEPENDENCY).healthy;
     let magick_available = probe_dependency(MAGICK_DEPENDENCY).healthy;
+    let uv_available = probe_dependency(UV_DEPENDENCY).healthy;
+    let codex_available = probe_dependency(CODEX_DEPENDENCY).healthy;
     let model_path = crate::model::resolved_model_path(paths, config).ok();
-    let model_ready = model_path.as_ref().is_some_and(|path| {
-        fs::metadata(path)
-            .map(|metadata| metadata.is_file() && metadata.len() > 0)
-            .unwrap_or(false)
-    });
+    let model_ready = model_path
+        .as_ref()
+        .is_some_and(|path| match config.transcribe.engine {
+            TranscribeEngine::WhisperRs => fs::metadata(path)
+                .map(|metadata| metadata.is_file() && metadata.len() > 0)
+                .unwrap_or(false),
+            TranscribeEngine::FasterWhisper => directory_has_entries(path),
+        });
+    let transcription_engine_ready = match config.transcribe.engine {
+        TranscribeEngine::WhisperRs => model_ready,
+        TranscribeEngine::FasterWhisper => uv_available,
+    };
+    let cleanup_ready = !config.transcribe.cleanup.enabled
+        || cleanup_command_ready(&config.transcribe.cleanup.command);
 
     let mut missing = Vec::new();
     if !paths.config_path.exists() {
@@ -677,6 +795,12 @@ pub fn detect_runtime_health(paths: &ConfigPaths, config: &Config) -> RuntimeHea
     if !model_ready {
         missing.push("model".to_string());
     }
+    if !transcription_engine_ready {
+        missing.push("transcription_engine".to_string());
+    }
+    if !cleanup_ready {
+        missing.push("cleanup".to_string());
+    }
 
     RuntimeHealth {
         installed,
@@ -687,11 +811,22 @@ pub fn detect_runtime_health(paths: &ConfigPaths, config: &Config) -> RuntimeHea
         ffprobe_available,
         cmake_available,
         magick_available,
+        uv_available,
+        codex_available,
+        transcription_engine_ready,
+        cleanup_ready,
         build_ready: cargo_available && cmake_available,
         fallback_renderer_ready: magick_available,
         model_ready,
         missing,
     }
+}
+
+fn directory_has_entries(path: &Path) -> bool {
+    fs::read_dir(path)
+        .ok()
+        .and_then(|mut entries| entries.next())
+        .is_some()
 }
 
 #[cfg(test)]

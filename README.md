@@ -25,15 +25,19 @@ The command model stays explicit:
 
 | Transcribe | Translate | Burn-in | Watermark | Lifecycle |
 | --- | --- | --- | --- | --- |
-| Extract audio with `ffmpeg`, transcribe with Whisper, write `.srt` | Append multilingual lines to existing cues via Gemini | Render an existing subtitle file into video | Apply text or image watermarks with ffmpeg plus ImageMagick fallback | Install, status, update, and uninstall support |
-| Primary flow stays subtitle-first | Cue timing and indexes stay unchanged | Primary renderer uses `ffmpeg` subtitle filters when available | Position, opacity, size, and margin are explicit | Configured with `lilaccaps.toml` and `LILACCAPS_HOME` |
+| Extract audio with `ffmpeg`, transcribe with `whisper-rs` or faster-whisper, write `.srt` | Append multilingual lines to existing cues via Gemini | Render an existing subtitle file into video | Apply text or image watermarks with ffmpeg plus ImageMagick fallback | Install, status, update, and uninstall support |
+| Local-first subtitle timing, VAD, QA, and optional text-only Codex cleanup | Cue timing and indexes stay unchanged | Primary renderer uses `ffmpeg` subtitle filters when available | Position, opacity, size, and margin are explicit | Configured with `lilaccaps.toml` and `LILACCAPS_HOME` |
 | Output path is explicit | Translation output is explicit | Fallback renderer uses ImageMagick overlays when needed | Output path is explicit | OpenClaw skill bootstrap is supported |
 
 ## Features
 
 - Unified CLI under `lilaccaps`
 - `transcribe`, `translate`, `burnin`, and `watermark` kept as separate first-class workflows
-- Managed Whisper model download under the runtime home
+- Managed Whisper model/cache storage under the runtime home
+- Rust-native `whisper-rs` default plus an opt-in uv-managed faster-whisper 1.2.1 backend with
+  `large-v3`/`large-v3-turbo`, Silero VAD, and word timestamps
+- Optional conservative Codex text cleanup that preserves cue count, order, and timing and rejects
+  malformed or wholesale rewritten results
 - Streamed, atomic model downloads and atomic media/subtitle outputs
 - Runtime health checks through `lilaccaps status`
 - Automatic Homebrew dependency refresh during `lilaccaps update`
@@ -55,6 +59,11 @@ The command model stays explicit:
 - `cmake`
 - ImageMagick `magick`
 
+Optional transcription tools:
+
+- `uv` for the `faster-whisper` engine; the pinned helper environment is created on demand
+- an authenticated `codex` CLI for `transcribe.cleanup.enabled = true` or `--cleanup`
+
 For native `burnin` rendering, prefer an `ffmpeg` build that includes the `subtitles` or
 `ass` filters through `libass`. On macOS with Homebrew, `ffmpeg-full` is the reliable option.
 Without those filters, `lilaccaps` falls back to ImageMagick overlay rendering.
@@ -63,6 +72,12 @@ On macOS with Homebrew:
 
 ```bash
 brew install ffmpeg-full cmake imagemagick
+```
+
+Install `uv` as well when using faster-whisper:
+
+```bash
+brew install uv
 ```
 
 ## Install
@@ -126,6 +141,8 @@ After installation, `lilaccaps status` reports:
 - core runtime readiness (`healthy`, `missing`)
 - build/update readiness (`cargo_available`, `cmake_available`, `build_ready`)
 - fallback renderer readiness (`magick_available`, `fallback_renderer_ready`)
+- optional engine readiness (`uv_available`, `transcription_engine_ready`)
+- optional cleanup readiness (`codex_available`, `cleanup_ready`)
 - fixability (`brew_packages`, `can_fix_with_brew`)
 - dependency probe status, resolved executable path, detected version, and startup error
 - release-check errors separately from the last known version fields
@@ -161,7 +178,7 @@ This initializes:
 
 - `~/.lilac/lilaccaps/lilaccaps.toml`
 - runtime home, defaulting to `~/.lilac/lilaccaps`
-- Whisper model assets under the runtime home
+- model assets/cache for the configured transcription engine under the runtime home
 - OpenClaw skill bootstrap files
 
 For translation, create a local `.env` file under the runtime home, for example
@@ -182,6 +199,8 @@ Transcribe into subtitles:
 ```bash
 lilaccaps transcribe ./input.mp4
 lilaccaps transcribe ./input.mp4 --lang zh
+lilaccaps transcribe ./input.mp4 --lang zh --engine faster-whisper --model large-v3-turbo
+lilaccaps transcribe ./input.mp4 --lang zh --engine faster-whisper --cleanup
 ```
 
 Translate an existing `.srt` into one or more target languages:
@@ -256,9 +275,27 @@ Important values:
 - `runtime.home`
 - `agent.skill_path`
 - `release.github_repo`
+- `transcribe.engine`
 - `transcribe.language`
+- `transcribe.segmentation.chunk_seconds`
+- `transcribe.segmentation.overlap_seconds`
+- `transcribe.segmentation.mode`
+- `transcribe.segmentation.min_speech_ms`
+- `transcribe.segmentation.min_silence_ms`
+- `transcribe.segmentation.padding_ms`
+- `transcribe.segmentation.max_window_seconds`
+- `transcribe.cues.min_duration_ms`
+- `transcribe.cues.max_duration_ms`
+- `transcribe.cues.end_padding_ms`
+- `transcribe.cues.pause_split_ms`
+- `transcribe.cues.max_chars_per_line`
+- `transcribe.cues.max_cjk_chars_per_line`
+- `transcribe.cues.max_lines`
 - `transcribe.model.id`
 - `transcribe.model.path`
+- `transcribe.cleanup.enabled`
+- `transcribe.cleanup.command`
+- `transcribe.cleanup.model`
 - `translate.model`
 - `translate.append`
 - `translate.default_targets`
@@ -280,11 +317,12 @@ are rejected so lifecycle commands cannot change meaning with the current workin
 `"en"`, `"zh"`, or `"ja"` to force transcription in a specific language. `--lang` on
 `lilaccaps transcribe` overrides the config value for a single run.
 
-When `language = "auto"`, `lilaccaps` samples the first 30 seconds for Whisper language detection
-and then transcribes with the detected language explicitly. That avoids the `detect_language=true`
-detect-only path in `whisper.cpp` and reports the effective language in the command output.
+With the default `whisper-rs` engine, `language = "auto"` samples the first 30 seconds for language
+detection and then transcribes with the detected language explicitly. That avoids the
+`detect_language=true` detect-only path in `whisper.cpp`. Faster-whisper performs its own language
+detection when no language is forced. Both engines report the effective language.
 
-When you force a language, `lilaccaps` tries:
+When you force a language on `whisper-rs`, `lilaccaps` tries:
 
 - requested language with beam search
 - requested language with greedy decoding
@@ -296,15 +334,119 @@ When you force a language, `lilaccaps` tries:
 If all attempts still produce no subtitle text, the terminal error includes per-attempt
 segment diagnostics.
 
-Transcription runs in bounded 30-second chunks. For inputs longer than one minute, the command
-prints the extracted audio duration to stderr, and multi-chunk runs print chunk progress to stderr
-while preserving the normal stdout summary for successful runs. This makes accidentally long media,
-such as a downloaded file whose metadata says it is an hour long, visible instead of looking like a
-post-audio-prep hang.
+### Transcription engines
 
-Supported `transcribe.model.id` values currently include `tiny`, `base`, `small`, `medium`
-and their `.en` variants. For Chinese, Japanese, and other non-English speech, use the
-non-`.en` models.
+`whisper-rs` remains the zero-Python default and supports `tiny`, `base`, `small`, `medium`, and
+their `.en` variants. It is the simpler installation and retains deterministic local adaptive-RMS
+segmentation. For higher transcription quality, select faster-whisper with `large-v3-turbo` or
+`large-v3`:
+
+```bash
+lilaccaps transcribe input.mp4 --engine faster-whisper --model large-v3-turbo --lang zh
+```
+
+The faster-whisper backend is a pinned PEP 723 Python helper managed entirely by `uv`; no pip or
+project virtual-environment workflow is required. Its model is downloaded into
+`$LILACCAPS_HOME/models/faster-whisper` on first use. It enables faster-whisper word timestamps and
+Silero VAD, reports `segmentation_strategy = silero-vad`, and feeds the same deterministic cue
+builder and QA path as `whisper-rs`. Selecting `--engine faster-whisper` without `--model`
+automatically chooses `large-v3-turbo` when the configured model is incompatible.
+
+| Engine | Models | Segmentation | Best fit |
+| --- | --- | --- | --- |
+| `whisper-rs` (default) | `tiny`, `base`, `small`, `medium`, `.en` variants | adaptive RMS, padded overlapping windows | simplest Rust-native local setup |
+| `faster-whisper` | `large-v3-turbo`, `large-v3` | Silero VAD in faster-whisper | higher-quality Mandarin and long-form transcription |
+
+The default `whisper-rs` path uses a deterministic 20 ms RMS analysis to derive an adaptive speech
+threshold, bridge short pauses, remove isolated noise bursts, pad detected speech, and omit long
+silent regions. Continuous speech is split into bounded 30-second windows with two seconds of
+overlap. If no speech regions are detected, the command falls back to fixed overlapping windows.
+
+The overlap gives Whisper context on both sides of long-speech boundaries. Each overlapping region
+has one deterministic owner, and repeated or contained boundary cues are deduplicated before output,
+so shared context does not produce double subtitles. Set `mode = "fixed"` for the Phase 1 behavior.
+Successful `whisper-rs` output reports `segmentation_strategy` (`speech`, `fixed`, or
+`fixed-fallback`) and `window_count`; stderr reports detected regions, threshold, and speech
+coverage. The segmentation settings below apply to `whisper-rs`; faster-whisper owns its Silero VAD
+pass.
+
+Whisper token timestamps are the default cue source. UTF-8 token fragments are reassembled safely,
+special tokens are ignored, and cues are rebuilt at punctuation and pauses with balanced,
+language-aware character and duration limits. This is especially important for CJK text, where cue
+boundaries cannot rely on spaces. Successful output reports `cue_timing = word`; if token timing or
+reconstructed text fails integrity checks in any window, that window automatically uses the
+segment-based proportional splitter and output reports `mixed` or `segment-fallback`.
+
+Generated cues then pass through deterministic timing cleanup. Empty cues are removed, indexes are
+renumbered, timestamps are clamped to the media duration, short cues are extended when space permits,
+a small end padding is applied, and overlaps are eliminated. Structural SRT QA failures stop
+publication; remaining readability findings are reported as
+`transcribe_qa_warning` without discarding an otherwise valid transcript. Successful command output
+includes `cue_count` and `qa_warning_count`.
+
+For inputs longer than one minute, the command prints the extracted audio duration to stderr, and
+multi-window runs print progress while preserving the normal stdout summary. This makes accidentally
+long media, such as a downloaded file whose metadata says it is an hour long, visible instead of
+looking like a post-audio-prep hang.
+
+Default quality settings:
+
+```toml
+[transcribe]
+engine = "whisper-rs"
+language = "auto"
+
+[transcribe.segmentation]
+mode = "speech"
+chunk_seconds = 30
+overlap_seconds = 2
+min_speech_ms = 400
+min_silence_ms = 350
+padding_ms = 300
+max_window_seconds = 30
+
+[transcribe.cues]
+min_duration_ms = 800
+max_duration_ms = 6000
+end_padding_ms = 150
+pause_split_ms = 500
+max_chars_per_line = 42
+max_cjk_chars_per_line = 18
+max_lines = 2
+
+[transcribe.cleanup]
+enabled = false
+command = "codex"
+model = "gpt-5.6-terra"
+```
+
+To make the higher-quality engine persistent, set both engine and model:
+
+```toml
+[transcribe]
+engine = "faster-whisper"
+
+[transcribe.model]
+id = "large-v3-turbo"
+```
+
+Omit `transcribe.model.path` to use the managed model cache. An explicit path is useful for an
+already-downloaded local model directory.
+
+### Optional conservative text cleanup
+
+`--cleanup` enables a final text-only Codex pass after local transcription and timing optimization.
+Use `--cleanup MODEL` to override the configured cleanup model for one run. The subprocess uses
+`codex exec` in an isolated temporary working directory with a read-only sandbox, ephemeral session,
+and a strict JSON schema. Validation requires every cue index exactly once, preserves all timestamps,
+rejects empty/multiline text, and rejects edits that rewrite more than half of a cue. Any command,
+schema, or validation failure aborts without publishing the output SRT.
+
+Cleanup is disabled by default because subtitle text is sent to the configured Codex provider. It
+does not send the source audio or video, but the transcript may still be sensitive. Keep it disabled
+for fully local work or when the recognition text must not leave the machine. The local deterministic
+QA pass always runs, regardless of cleanup. `transcribe.cleanup.command` may be an executable name
+on `PATH` or an absolute path to a specific Codex binary; relative command paths are rejected.
 
 `translate.model` defaults to `"gemini-3.1-flash-lite"`. The retired
 `"gemini-3.1-flash-lite-preview"` managed default is migrated automatically during install or
