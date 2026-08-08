@@ -6,7 +6,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use reqwest::blocking::Client;
 
-use crate::config::{Config, ConfigPaths};
+use crate::config::{Config, ConfigPaths, TranscribeEngine};
 use crate::runtime::{ScopedTempPath, ensure_parent_dir, models_dir, parent_dir};
 
 const MODEL_BASE_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
@@ -16,12 +16,37 @@ pub fn resolved_model_path(paths: &ConfigPaths, config: &Config) -> Result<PathB
         return Ok(path.clone());
     }
 
-    let file_name = model_file_name(&config.transcribe.model.id)?;
-    Ok(models_dir(&paths.runtime_home).join(file_name))
+    match config.transcribe.engine {
+        TranscribeEngine::WhisperRs => {
+            let file_name = model_file_name(&config.transcribe.model.id)?;
+            Ok(models_dir(&paths.runtime_home).join(file_name))
+        }
+        TranscribeEngine::FasterWhisper => {
+            Ok(models_dir(&paths.runtime_home).join("faster-whisper"))
+        }
+    }
 }
 
 pub fn ensure_model_downloaded(paths: &ConfigPaths, config: &Config) -> Result<PathBuf> {
     let destination = resolved_model_path(paths, config)?;
+    if config.transcribe.engine == TranscribeEngine::FasterWhisper {
+        if config.transcribe.model.path.is_some() {
+            if !destination.is_dir() {
+                bail!(
+                    "faster-whisper model path is not an existing directory: {}",
+                    destination.display()
+                );
+            }
+            return Ok(destination);
+        }
+        fs::create_dir_all(&destination).with_context(|| {
+            format!(
+                "failed to create faster-whisper model cache {}",
+                destination.display()
+            )
+        })?;
+        return Ok(destination);
+    }
     if destination.exists() {
         let metadata = fs::metadata(&destination)
             .with_context(|| format!("failed to inspect model file {}", destination.display()))?;

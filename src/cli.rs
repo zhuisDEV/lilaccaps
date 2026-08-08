@@ -79,6 +79,12 @@ pub struct TranscribeArgs {
     pub output: Option<PathBuf>,
     #[arg(long = "lang", visible_alias = "language")]
     pub lang: Option<String>,
+    #[arg(long, value_name = "ENGINE")]
+    pub engine: Option<String>,
+    #[arg(long, value_name = "MODEL")]
+    pub model: Option<String>,
+    #[arg(long, value_name = "MODEL", num_args = 0..=1, default_missing_value = "")]
+    pub cleanup: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]

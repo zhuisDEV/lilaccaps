@@ -9,6 +9,10 @@ current manual.
 Implemented from this proposal:
 
 - local media to `.srt` transcription
+- selectable local `whisper-rs` and uv-managed faster-whisper engines
+- speech-aware/Silero VAD segmentation, word-timestamp cue rebuilding, timing optimization, and SRT
+  QA
+- optional conservative Codex text cleanup with unchanged cue structure and timing
 - subtitle translation and multilingual cue composition
 - burned-in subtitle video output
 - separate lifecycle, health, configuration, and OpenClaw integration boundaries
@@ -20,8 +24,9 @@ Not currently implemented:
 - speaker segmentation
 - automatic `media-ingest` download orchestration
 
-Those remain possible independent additions. They must compose with the existing commands rather
-than move acquisition, transcription, translation, and rendering into one hidden workflow.
+Those remain possible independent additions, so this original roadmap is not a finished plan file.
+They must compose with the existing commands rather than move acquisition, transcription,
+translation, and rendering into one hidden workflow.
 
 ## Conclusion
 Create a **new standalone skill** for subtitle generation and subtitle-enabled video output, instead of expanding `media-ingest` itself. Keep `media-ingest` focused on media acquisition, and let the new skill orchestrate transcription, `.srt` generation, translation, and subtitle muxing/burn-in through a proper subagent workflow.

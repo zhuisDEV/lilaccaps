@@ -72,7 +72,16 @@ Transcribe media to subtitles:
 ```bash
 lilaccaps transcribe ./input.mp4
 lilaccaps transcribe ./input.mp4 --lang zh
+lilaccaps transcribe ./input.mp4 --lang zh --engine faster-whisper --model large-v3-turbo
+lilaccaps transcribe ./input.mp4 --lang zh --engine faster-whisper --cleanup
 ```
+
+`whisper-rs` is the default, simplest local engine. It uses adaptive speech-aware segmentation,
+bridges short pauses, pads speech, omits long silence, bounds continuous speech with overlapping
+windows, and deduplicates boundaries. Faster-whisper is the higher-quality opt-in engine; it uses
+the pinned uv-managed helper, `large-v3-turbo`/`large-v3`, Silero VAD, and word timestamps. Both
+engines use the same cue builder and final SRT validation. Set
+`transcribe.segmentation.mode = "fixed"` only when fixed `whisper-rs` windows are preferred.
 
 Translate an existing subtitle file:
 
@@ -121,10 +130,34 @@ Common settings:
 
 ```toml
 [transcribe]
+engine = "whisper-rs"
 language = "auto"
+
+[transcribe.segmentation]
+mode = "speech"
+chunk_seconds = 30
+overlap_seconds = 2
+min_speech_ms = 400
+min_silence_ms = 350
+padding_ms = 300
+max_window_seconds = 30
+
+[transcribe.cues]
+min_duration_ms = 800
+max_duration_ms = 6000
+end_padding_ms = 150
+pause_split_ms = 500
+max_chars_per_line = 42
+max_cjk_chars_per_line = 18
+max_lines = 2
 
 [transcribe.model]
 id = "medium"
+
+[transcribe.cleanup]
+enabled = false
+command = "codex"
+model = "gpt-5.6-terra"
 
 [translate]
 model = "gemini-3.1-flash-lite"
@@ -144,6 +177,16 @@ enabled = true
 colour = "black"
 width = 2
 ```
+
+Transcription builds cues from Whisper token timestamps by default, preferring punctuation and
+pauses and applying CJK-aware character limits. `cue_timing` reports `word`, `mixed`, or
+`segment-fallback`; the fallback is automatic when timed-token text cannot be reconstructed safely.
+
+Use `--engine faster-whisper --model large-v3-turbo` when subtitle recognition quality matters more
+than the simplest installation; `uv` is required and the model downloads on first use. `--cleanup`
+adds an optional Codex text-only correction pass. It preserves cue count/order/timestamps, rejects
+large rewrites, and fails without publishing if validation fails. Cleanup sends subtitle text to the
+configured Codex provider, so leave it disabled for private or fully local workflows.
 
 ## Advanced Settings and CLI
 

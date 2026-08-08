@@ -24,14 +24,22 @@ jobs:
 
       - name: Install system dependencies
         run: |
-          brew install ffmpeg-full cmake imagemagick shellcheck actionlint gitleaks cargo-audit
+          brew install ffmpeg-full cmake imagemagick shellcheck actionlint gitleaks cargo-audit uv
           if brew list --versions ffmpeg >/dev/null 2>&1; then
             brew unlink ffmpeg
           fi
           brew link --overwrite --force ffmpeg-full
 
       - name: Format check
-        run: cargo fmt --all --check
+        run: |
+          cargo fmt --all --check
+          uvx ruff format --check python
+
+      - name: Python helper checks
+        run: |
+          uvx ruff check python
+          uvx ty check python
+          uv run --script python/faster_whisper_helper.py --audio python/faster_whisper_helper.py --model large-v3-turbo --download-root "${RUNNER_TEMP}/lilaccaps-model-check" --check
 
       - name: Installer checks
         run: |

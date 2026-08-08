@@ -2,16 +2,18 @@ use anyhow::Result;
 
 use crate::cli::DoctorArgs;
 use crate::config::load_config;
-use crate::runtime::{collect_doctor_report, detect_runtime_health, fix_dependencies_with_brew};
+use crate::runtime::{
+    collect_doctor_report_for_config, detect_runtime_health, fix_dependencies_with_brew,
+};
 
 pub fn run(args: DoctorArgs) -> Result<()> {
     let loaded = load_config(args.config_path)?;
-    let mut report = collect_doctor_report();
+    let mut report = collect_doctor_report_for_config(&loaded.config);
     let mut fixed_packages = Vec::new();
 
     if args.fix && !report.brew_packages.is_empty() {
         fixed_packages = fix_dependencies_with_brew(&report)?;
-        report = collect_doctor_report();
+        report = collect_doctor_report_for_config(&loaded.config);
     }
 
     let runtime_health = detect_runtime_health(&loaded.paths, &loaded.config);
@@ -45,6 +47,11 @@ pub fn run(args: DoctorArgs) -> Result<()> {
     println!("can_fix_with_brew = {}", report.can_fix_with_brew);
     println!("healthy = {}", runtime_health.healthy);
     println!("build_ready = {}", runtime_health.build_ready);
+    println!(
+        "transcription_engine_ready = {}",
+        runtime_health.transcription_engine_ready
+    );
+    println!("cleanup_ready = {}", runtime_health.cleanup_ready);
     println!(
         "fallback_renderer_ready = {}",
         runtime_health.fallback_renderer_ready

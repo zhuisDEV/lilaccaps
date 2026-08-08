@@ -57,9 +57,11 @@ pub fn write_bootstrap_markdown(paths: &ConfigPaths, config: &Config) -> Result<
 - `ffmpeg`: extract audio and render final video output\n\
 - `ffprobe`: inspect media streams and video dimensions\n\
 - `cmake`: build `whisper-rs` and its native `whisper.cpp` dependency\n\
-- `magick`: fallback burn-in renderer when the local `ffmpeg` build does not include the `subtitles` filter\n\n\
+- `magick`: fallback burn-in renderer when the local `ffmpeg` build does not include the `subtitles` filter\n\
+- optional `uv`: run the pinned faster-whisper helper and manage its Python environment\n\
+- optional `codex`: run conservative text-only subtitle cleanup when explicitly enabled\n\n\
 ## Install guidance\n\
-- macOS with Homebrew: `brew install ffmpeg-full cmake imagemagick`\n\
+- macOS with Homebrew: `brew install ffmpeg-full cmake imagemagick`; add `uv` for faster-whisper\n\
 - if you keep a plain `ffmpeg` build, transcription still works and burn-in falls back to ImageMagick when the `subtitles` or `ass` filters are missing\n\
 - after the binary is installed, `lilaccaps doctor --fix` can install or repair unhealthy mapped Homebrew packages automatically\n\
 - `lilaccaps update` refreshes `ffmpeg-full`, `cmake`, and `imagemagick` before updating the CLI; use `--skip-dependencies` when those packages are managed separately\n\
@@ -70,7 +72,7 @@ pub fn write_bootstrap_markdown(paths: &ConfigPaths, config: &Config) -> Result<
   - `cmake --version`\n\
   - `magick -version`\n\n\
 ## Runtime assets\n\
-- Whisper model is managed under `{}/models`\n\
+- transcription models and caches are managed under `{}/models`\n\
 - temporary working files are stored under `{}/tmp`\n\
 - config is stored in `lilaccaps.toml`\n\n\
 ## API credentials\n\
@@ -86,7 +88,17 @@ pub fn write_bootstrap_markdown(paths: &ConfigPaths, config: &Config) -> Result<
 ## Transcription language behavior\n\
 - `transcribe.language = \"auto\"` samples the first 30 seconds for language detection and then transcribes with the detected language explicitly\n\
 - `lilaccaps transcribe --lang <code>` forces a language for that run\n\
-- if a forced language yields no subtitle text, `lilaccaps` retries greedy decoding and can fall back to the detected language when it differs\n\n\
+- if a forced language yields no subtitle text, `lilaccaps` retries greedy decoding and can fall back to the detected language when it differs\n\
+- transcription uses local speech-aware segmentation by default: short pauses are bridged, short noise bursts are ignored, speech is padded, and long silence is omitted\n\
+- continuous speech uses bounded overlapping windows with deterministic ownership and boundary-cue deduplication; `transcribe.segmentation.mode = \"fixed\"` restores fixed windows\n\
+- generated cues use Whisper token timestamps with punctuation-, pause-, and CJK-aware splitting; unsafe token reconstruction automatically falls back to segment timing\n\
+- generated cues are duration-normalized, padded, de-overlapped, renumbered, and structurally validated before the SRT is published\n\
+- `transcribe_qa_warning` reports readability findings without discarding a structurally valid transcript\n\n\
+## Optional transcription quality paths\n\
+- `--engine faster-whisper --model large-v3-turbo` uses the uv-managed faster-whisper 1.2.1 helper, Silero VAD, and word timestamps\n\
+- `whisper-rs` remains the default and requires no Python runtime; both engines feed the same timing optimizer and SRT QA\n\
+- `--cleanup` sends subtitle text only to the configured Codex provider, preserves cue count/order/timestamps, rejects large rewrites, and fails closed\n\
+- leave cleanup disabled when subtitle text is private or must stay fully local\n\n\
 ## Burn-in style behavior\n\
 - `burnin.advanced_styling = true` enables per-line styling, custom spacing, and configured custom colours; set it to `false` to ignore those configured advanced settings and prefer the primary ffmpeg subtitle path when available; CLI `--colour` still overrides config for one run\n\
 - `burnin.font = \"auto\"` lets the renderer choose a suitable font, or you can force one with `lilaccaps burnin --font <name>`\n\
@@ -152,7 +164,23 @@ pub fn ensure_skill_file(config: &Config) -> Result<PathBuf> {
     }
 
     let content = format!(
-        "{GENERATED_SKILL_MARKER}\n# lilaccaps\n\nUse the `lilaccaps` CLI for transcription, subtitle rendering, and video watermarks.\n\n## Commands\n- `lilaccaps doctor`\n- `lilaccaps status`\n- `lilaccaps transcribe <input>`\n- `lilaccaps transcribe <input> --lang <code>`\n- `lilaccaps translate <input.srt> --to en --to ja --append`\n- `lilaccaps burnin <video> --subs <subtitle-file>`\n- `lilaccaps burnin <video> --subs <subtitle-file> --colour \"#ffd54f\" --size 42`\n- `lilaccaps burnin <video> --subs <subtitle-file> --outline-colour black --outline-width 3`\n- `lilaccaps watermark <video> --text \"lilac\"`\n- `lilaccaps watermark <video> --image <logo.png> --opacity 0.45 --size 180`\n\n## Notes\n- `burnin` is render-only.\n- `watermark` is render-only and accepts exactly one of `--text` or `--image`.\n- transcription is a separate workflow.\n- `translate` can append one or more target-language lines to each cue for multilingual subtitles.\n- `transcribe.language = \"auto\"` samples the first 30 seconds for language detection and then transcribes with that detected language explicitly.\n- `burnin.font = \"auto\"` lets the renderer choose a suitable font, `burnin.colour = \"auto\"` keeps the renderer default colour, `burnin.size = 0` auto-scales captions from video height, and `burnin.outline` defaults to a black 2px border.\n- watermark `--position` supports `top-left`, `top-right`, `bottom-left`, `bottom-right`, and `center`.\n- runtime home is configured via `lilaccaps.toml` and `LILACCAPS_HOME`.\n"
+        "{GENERATED_SKILL_MARKER}\n# lilaccaps\n\nUse the `lilaccaps` CLI for transcription, subtitle rendering, and video watermarks.\n\n## Commands\n- `lilaccaps doctor`\n- `lilaccaps status`\n- `lilaccaps transcribe <input>`\n- `lilaccaps transcribe <input> --lang <code>`\n- `lilaccaps translate <input.srt> --to en --to ja --append`\n- `lilaccaps burnin <video> --subs <subtitle-file>`\n- `lilaccaps burnin <video> --subs <subtitle-file> --colour \"#ffd54f\" --size 42`\n- `lilaccaps burnin <video> --subs <subtitle-file> --outline-colour black --outline-width 3`\n- `lilaccaps watermark <video> --text \"lilac\"`\n- `lilaccaps watermark <video> --image <logo.png> --opacity 0.45 --size 180`\n\n## Notes\n- `burnin` is render-only.\n- `watermark` is render-only and accepts exactly one of `--text` or `--image`.\n- transcription is a separate workflow.\n- `translate` can append one or more target-language lines to each cue for multilingual subtitles.\n- `transcribe.language = \"auto\"` samples the first 30 seconds for language detection and then transcribes with that detected language explicitly.\n- local speech-aware segmentation bridges short pauses, ignores short noise, pads speech, omits long silence, and uses bounded overlapping windows for continuous speech.\n- cue timing is normalized and SRT structure is validated before publication; set `transcribe.segmentation.mode = \"fixed\"` for fixed windows.\n- `burnin.font = \"auto\"` lets the renderer choose a suitable font, `burnin.colour = \"auto\"` keeps the renderer default colour, `burnin.size = 0` auto-scales captions from video height, and `burnin.outline` defaults to a black 2px border.\n- watermark `--position` supports `top-left`, `top-right`, `bottom-left`, `bottom-right`, and `center`.\n- runtime home is configured via `lilaccaps.toml` and `LILACCAPS_HOME`.\n"
+    );
+    let content = content.replace(
+        "- cue timing is normalized and SRT structure is validated before publication;",
+        "- cues are rebuilt from Whisper token timestamps at punctuation and pauses with CJK-aware limits; `cue_timing` reports word timing or automatic segment fallback.\n- cue timing is normalized and SRT structure is validated before publication;",
+    );
+    let content = content.replace(
+        "- `lilaccaps transcribe <input> --lang <code>`",
+        "- `lilaccaps transcribe <input> --lang <code>`\n- `lilaccaps transcribe <input> --engine faster-whisper --model large-v3-turbo --lang <code>`\n- `lilaccaps transcribe <input> --cleanup`",
+    );
+    let content = content.replace(
+        "- local speech-aware segmentation bridges short pauses, ignores short noise, pads speech, omits long silence, and uses bounded overlapping windows for continuous speech.",
+        "- `whisper-rs` is the default engine and uses local speech-aware overlapping windows.\n- faster-whisper is the higher-quality opt-in engine and requires `uv`; it uses `large-v3-turbo`/`large-v3`, Silero VAD, and word timestamps.\n- `--cleanup` is optional and sends subtitle text to Codex; it preserves structure, rejects large rewrites, and fails closed.",
+    );
+    let content = content.replace(
+        "- `transcribe.language = \"auto\"` samples the first 30 seconds for language detection and then transcribes with that detected language explicitly.",
+        "- `transcribe.language = \"auto\"` enables engine-specific automatic language detection.",
     );
 
     atomic_write(skill_path, content)

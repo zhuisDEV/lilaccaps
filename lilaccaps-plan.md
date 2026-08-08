@@ -15,7 +15,7 @@ lilaccaps install [--fix]
 lilaccaps update [--skip-dependencies]
 lilaccaps status [--json]
 lilaccaps uninstall --yes
-lilaccaps transcribe <media> [--lang <code>] [--output <file.srt>]
+lilaccaps transcribe <media> [--lang <code>] [--engine <engine>] [--model <model>] [--cleanup [model]] [--output <file.srt>]
 lilaccaps translate <file.srt> --to <language> [--append <bool>]
 lilaccaps burnin <video> --subs <file.srt> [--output <video>]
 lilaccaps watermark <video> (--text <text> | --image <path>) [--output <video>]
@@ -23,7 +23,16 @@ lilaccaps watermark <video> (--text <text> | --image <path>) [--output <video>]
 
 Current capabilities:
 
-- local Whisper transcription with automatic or explicit language selection
+- local `whisper-rs` and uv-managed faster-whisper transcription with automatic or explicit
+  language selection
+- overlapping transcription windows with deterministic boundary ownership and deduplication
+- local speech-aware segmentation with padding, pause bridging, bounded windows, and fixed fallback
+- Whisper token timestamps with punctuation-, pause-, and CJK-aware cue rebuilding plus safe segment
+  fallback
+- cue timing normalization plus structural and readability QA before SRT publication
+- higher-quality `large-v3`/`large-v3-turbo` transcription with Silero VAD and word timestamps
+- optional conservative Codex text cleanup with exact structural preservation and fail-closed
+  rewrite validation
 - Gemini subtitle translation while preserving cue indexes and timing
 - primary FFmpeg/libass burn-in plus an explicit ImageMagick overlay fallback
 - FFmpeg text/image watermarking plus ImageMagick conversion and text fallback
@@ -55,6 +64,8 @@ download-to-caption wrapper are not implemented commands.
 - Ownership marker: `$LILACCAPS_HOME/.lilaccaps-runtime`
 - OpenClaw skill default: `~/.openclaw/skills/lilaccaps/SKILL.md`
 - Translation credential: exported `GEMINI_API_KEY`, then `$LILACCAPS_HOME/.env`
+- Optional faster-whisper runtime: `uv` plus a pinned PEP 723 helper environment
+- Optional cleanup runtime: authenticated `codex`; subtitle text is sent to its configured provider
 
 Paths beginning with `~` are expanded after config parsing. Explicit environment values take
 precedence over file-based defaults.
@@ -64,8 +75,12 @@ precedence over file-based defaults.
 - `src/commands`: argument-to-pipeline dispatch and structured command summaries
 - `src/pipelines`: one module per media workflow
 - `src/media.rs`: FFmpeg/FFprobe boundaries and media probing
-- `src/model.rs`: Whisper model resolution and atomic streaming download
-- `src/subtitles.rs`: SRT parsing and atomic serialization
+- `src/segmentation.rs`: local speech analysis and bounded transcription-window planning
+- `src/model.rs`: engine-aware model/cache resolution and atomic whisper-rs model download
+- `src/faster_whisper.rs` and `python/faster_whisper_helper.py`: uv-managed faster-whisper boundary
+- `src/cleanup.rs`: isolated structured Codex cleanup and conservative output validation
+- `src/subtitles.rs`: timed-word cue building, SRT timing optimization, QA, parsing, and atomic
+  serialization
 - `src/render.rs`: burn-in renderer selection and overlay implementation
 - `src/watermark.rs`: text/image watermark renderer selection
 - `src/runtime.rs`: dependencies, paths, temporary assets, ownership, and lifecycle safety
@@ -78,6 +93,9 @@ Every release must complete:
 
 ```bash
 cargo fmt --all --check
+uvx ruff format --check python
+uvx ruff check python
+uvx ty check python
 shellcheck install.sh
 actionlint
 gitleaks detect --source . --no-banner --redact

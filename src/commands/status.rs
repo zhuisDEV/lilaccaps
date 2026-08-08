@@ -7,7 +7,7 @@ use crate::integration::detect_skill_path;
 use crate::model::resolved_model_path;
 use crate::release::latest_release;
 use crate::runtime::{
-    DependencyStatus, collect_doctor_report, current_executable, detect_runtime_health,
+    DependencyStatus, collect_doctor_report_for_config, current_executable, detect_runtime_health,
     install_binary_path,
 };
 
@@ -21,7 +21,7 @@ pub fn run(args: StatusArgs) -> Result<()> {
     let install_path = install_binary_path()?;
     let current_exe = current_executable()?;
     let runtime_health = detect_runtime_health(&loaded.paths, &loaded.config);
-    let doctor_report = collect_doctor_report();
+    let doctor_report = collect_doctor_report_for_config(&loaded.config);
     let detected_skill = detect_skill_path(&loaded.config.agent);
     let model_path = resolved_model_path(&loaded.paths, &loaded.config)?;
     let detected_skill_string = detected_skill
@@ -63,6 +63,10 @@ pub fn run(args: StatusArgs) -> Result<()> {
             "ffprobe_available": runtime_health.ffprobe_available,
             "cmake_available": runtime_health.cmake_available,
             "magick_available": runtime_health.magick_available,
+            "uv_available": runtime_health.uv_available,
+            "codex_available": runtime_health.codex_available,
+            "transcription_engine_ready": runtime_health.transcription_engine_ready,
+            "cleanup_ready": runtime_health.cleanup_ready,
             "build_ready": runtime_health.build_ready,
             "fallback_renderer_ready": runtime_health.fallback_renderer_ready,
             "can_fix_with_brew": doctor_report.can_fix_with_brew,
@@ -106,6 +110,13 @@ pub fn run(args: StatusArgs) -> Result<()> {
     println!("ffprobe_available = {}", runtime_health.ffprobe_available);
     println!("cmake_available = {}", runtime_health.cmake_available);
     println!("magick_available = {}", runtime_health.magick_available);
+    println!("uv_available = {}", runtime_health.uv_available);
+    println!("codex_available = {}", runtime_health.codex_available);
+    println!(
+        "transcription_engine_ready = {}",
+        runtime_health.transcription_engine_ready
+    );
+    println!("cleanup_ready = {}", runtime_health.cleanup_ready);
     println!("build_ready = {}", runtime_health.build_ready);
     println!(
         "fallback_renderer_ready = {}",

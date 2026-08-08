@@ -8,27 +8,43 @@ use whisper_rs::{
     get_lang_str, install_logging_hooks,
 };
 
-use crate::config::load_or_init_config;
+use crate::cleanup::clean_cues;
+use crate::config::{
+    TranscribeConfig, TranscribeEngine, TranscribeSegmentationMode, load_or_init_config,
+    validate_transcribe_config,
+};
+use crate::faster_whisper;
 use crate::media::{ensure_ffmpeg_available, extract_audio_to_wav};
 use crate::model::ensure_model_downloaded;
 use crate::runtime::{
     ScopedTempPath, ensure_dir, ensure_parent_dir, paths_refer_to_same_file, tmp_dir,
 };
-use crate::subtitles::{SubtitleCue, write_srt_file};
+use crate::segmentation::{SpeechWindowOptions, fixed_windows, speech_windows};
+use crate::subtitles::{
+    CuePolicy, SubtitleCue, TimedWord, build_cues_from_timed_words, optimize_cues, validate_cues,
+    write_srt_file,
+};
 
 static WHISPER_LOGGING_HOOKS: Once = Once::new();
 const LANGUAGE_DETECTION_SECONDS: usize = 30;
-const TRANSCRIPTION_CHUNK_SECONDS: usize = 30;
 
 #[derive(Debug, Clone)]
 pub struct TranscribeOutput {
     pub input: PathBuf,
     pub output: PathBuf,
     pub model_path: PathBuf,
+    pub engine: &'static str,
+    pub model: String,
     pub language: String,
     pub fallback_language_used: bool,
     pub fallback_decoding_used: bool,
     pub decoding_strategy: &'static str,
+    pub cue_count: usize,
+    pub qa_warning_count: usize,
+    pub cue_timing: &'static str,
+    pub segmentation_strategy: &'static str,
+    pub window_count: usize,
+    pub cleanup: String,
     pub status: &'static str,
 }
 
@@ -36,9 +52,27 @@ pub struct TranscribeOutput {
 struct AttemptDiagnostics {
     language: String,
     decoding_strategy: &'static str,
-    chunk_count: usize,
+    segmentation_strategy: &'static str,
+    window_count: usize,
+    speech_region_count: usize,
+    speech_threshold: Option<f32>,
+    speech_coverage: f64,
+    cue_timing: &'static str,
+    timed_word_count: usize,
     segment_count: usize,
     non_empty_segments: usize,
+}
+
+#[derive(Debug)]
+struct DecodedTranscript {
+    cues: Vec<SubtitleCue>,
+    language: String,
+    fallback_language_used: bool,
+    fallback_decoding_used: bool,
+    decoding_strategy: &'static str,
+    cue_timing: &'static str,
+    segmentation_strategy: &'static str,
+    window_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,6 +89,18 @@ enum DecodeStrategy {
     Greedy,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ChunkTiming {
+    offset_cs: i64,
+    duration_cs: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct WordCueOptions {
+    policy: CuePolicy,
+    pause_split_cs: i64,
+}
+
 impl DecodeStrategy {
     fn label(self) -> &'static str {
         match self {
@@ -67,10 +113,18 @@ impl DecodeStrategy {
 impl AttemptDiagnostics {
     fn summary(&self) -> String {
         format!(
-            "language={} decoding={} chunks={} total_segments={} non_empty_segments={} blank_segments={}",
+            "language={} decoding={} segmentation={} windows={} speech_regions={} speech_threshold={} speech_coverage={:.1}% cue_timing={} timed_words={} total_segments={} non_empty_segments={} blank_segments={}",
             self.language,
             self.decoding_strategy,
-            self.chunk_count,
+            self.segmentation_strategy,
+            self.window_count,
+            self.speech_region_count,
+            self.speech_threshold
+                .map(|threshold| format!("{threshold:.5}"))
+                .unwrap_or_else(|| "n/a".to_string()),
+            self.speech_coverage * 100.0,
+            self.cue_timing,
+            self.timed_word_count,
             self.segment_count,
             self.non_empty_segments,
             self.segment_count.saturating_sub(self.non_empty_segments)
@@ -99,14 +153,17 @@ pub fn run(
     config_path: Option<PathBuf>,
     output: Option<PathBuf>,
     lang: Option<String>,
+    engine: Option<String>,
+    model: Option<String>,
+    cleanup: Option<String>,
 ) -> Result<TranscribeOutput> {
     if !input.exists() {
         bail!("input media does not exist: {}", input.display());
     }
 
     ensure_ffmpeg_available()?;
-    WHISPER_LOGGING_HOOKS.call_once(install_logging_hooks);
-    let loaded = load_or_init_config(config_path)?;
+    let mut loaded = load_or_init_config(config_path)?;
+    apply_transcribe_overrides(&mut loaded.config.transcribe, engine, model, cleanup)?;
     ensure_dir(&loaded.paths.runtime_home)?;
     ensure_dir(&tmp_dir(&loaded.paths.runtime_home))?;
 
@@ -124,7 +181,27 @@ pub fn run(
         )
     })?;
 
-    let model_path = ensure_model_downloaded(&loaded.paths, &loaded.config)?;
+    let (engine_label, model_path) = match loaded.config.transcribe.engine {
+        TranscribeEngine::WhisperRs => {
+            WHISPER_LOGGING_HOOKS.call_once(install_logging_hooks);
+            (
+                "whisper-rs",
+                ensure_model_downloaded(&loaded.paths, &loaded.config)?,
+            )
+        }
+        TranscribeEngine::FasterWhisper => (
+            "faster-whisper",
+            loaded
+                .config
+                .transcribe
+                .model
+                .path
+                .clone()
+                .unwrap_or_else(|| {
+                    crate::runtime::models_dir(&loaded.paths.runtime_home).join("faster-whisper")
+                }),
+        ),
+    };
     let audio_prefix = input
         .file_stem()
         .and_then(|value| value.to_str())
@@ -136,24 +213,183 @@ pub fn run(
     );
     let language = resolve_language(lang.as_deref(), Some(&loaded.config.transcribe.language))?;
     extract_audio_to_wav(&input, audio.path())?;
-    let (
-        cues,
-        effective_language,
+    let DecodedTranscript {
+        mut cues,
+        language: effective_language,
         fallback_language_used,
         fallback_decoding_used,
         decoding_strategy,
-    ) = transcribe_to_cues(&model_path, audio.path(), language.as_deref())?;
+        cue_timing,
+        segmentation_strategy,
+        window_count,
+    } = match loaded.config.transcribe.engine {
+        TranscribeEngine::WhisperRs => transcribe_to_cues(
+            &model_path,
+            audio.path(),
+            language.as_deref(),
+            &loaded.config.transcribe,
+        )?,
+        TranscribeEngine::FasterWhisper => transcribe_with_faster_whisper(
+            &loaded.paths.runtime_home,
+            audio.path(),
+            language.as_deref(),
+            &loaded.config.transcribe,
+        )?,
+    };
+    let cleanup_status = if loaded.config.transcribe.cleanup.enabled {
+        cues = clean_cues(
+            &loaded.paths.runtime_home,
+            &effective_language,
+            &loaded.config.transcribe.cleanup,
+            &cues,
+        )?;
+        format!("codex:{}", loaded.config.transcribe.cleanup.model)
+    } else {
+        "disabled".to_string()
+    };
+    let qa_warnings = validate_cues(&cues, cue_policy(&loaded.config.transcribe))?.warnings;
+    for warning in &qa_warnings {
+        eprintln!("transcribe_qa_warning = {warning}");
+    }
     write_srt_file(&output, &cues)?;
 
     Ok(TranscribeOutput {
         input,
         output,
         model_path,
+        engine: engine_label,
+        model: loaded.config.transcribe.model.id.clone(),
         language: effective_language,
         fallback_language_used,
         fallback_decoding_used,
         decoding_strategy,
+        cue_count: cues.len(),
+        qa_warning_count: qa_warnings.len(),
+        cue_timing,
+        segmentation_strategy,
+        window_count,
+        cleanup: cleanup_status,
         status: "generated",
+    })
+}
+
+fn apply_transcribe_overrides(
+    config: &mut TranscribeConfig,
+    engine: Option<String>,
+    model: Option<String>,
+    cleanup: Option<String>,
+) -> Result<()> {
+    if let Some(engine) = engine {
+        config.engine = match engine.trim().to_lowercase().as_str() {
+            "whisper-rs" | "whisper" => TranscribeEngine::WhisperRs,
+            "faster-whisper" | "faster" => TranscribeEngine::FasterWhisper,
+            _ => bail!(
+                "unsupported transcription engine `{engine}`; use whisper-rs or faster-whisper"
+            ),
+        };
+    }
+    if model.is_none() && config.model.path.is_none() {
+        match config.engine {
+            TranscribeEngine::WhisperRs
+                if !matches!(
+                    config.model.id.as_str(),
+                    "tiny"
+                        | "base"
+                        | "small"
+                        | "medium"
+                        | "tiny.en"
+                        | "base.en"
+                        | "small.en"
+                        | "medium.en"
+                ) =>
+            {
+                config.model.id = "base".to_string();
+            }
+            TranscribeEngine::FasterWhisper
+                if !matches!(config.model.id.as_str(), "large-v3" | "large-v3-turbo") =>
+            {
+                config.model.id = "large-v3-turbo".to_string();
+            }
+            _ => {}
+        }
+    }
+    if let Some(model) = model {
+        config.model.id = model;
+        config.model.path = None;
+    }
+    if let Some(cleanup_model) = cleanup {
+        config.cleanup.enabled = true;
+        if !cleanup_model.trim().is_empty() {
+            config.cleanup.model = cleanup_model;
+        }
+    }
+    validate_transcribe_config(config)
+}
+
+fn transcribe_with_faster_whisper(
+    runtime_home: &Path,
+    audio_path: &Path,
+    language: Option<&str>,
+    config: &TranscribeConfig,
+) -> Result<DecodedTranscript> {
+    let model = config
+        .model
+        .path
+        .as_deref()
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|| config.model.id.clone());
+    let output = faster_whisper::transcribe(runtime_home, audio_path, &model, language)?;
+    if output.segments.is_empty() {
+        bail!("faster-whisper returned no subtitle segments");
+    }
+    let timed_cues = build_cues_from_timed_words(
+        &output.words,
+        cue_policy(config),
+        milliseconds_to_centiseconds(config.cues.pause_split_ms),
+    );
+    let words_match = transcript_text_key(
+        &output
+            .words
+            .iter()
+            .map(|word| word.text.as_str())
+            .collect::<String>(),
+    ) == transcript_text_key(
+        &output
+            .segments
+            .iter()
+            .map(|cue| cue.text.as_str())
+            .collect::<String>(),
+    );
+    let (raw_cues, cue_timing) = if !timed_cues.is_empty() && words_match {
+        (timed_cues, "word")
+    } else {
+        (output.segments, "segment-fallback")
+    };
+    let media_duration_cs = output
+        .duration_cs
+        .max(raw_cues.last().map_or(0, |cue| cue.end_cs));
+    let cues = optimize_cues(raw_cues, media_duration_cs, cue_policy(config));
+    validate_cues(&cues, cue_policy(config))?;
+    eprintln!(
+        "transcribe_segmentation = strategy=silero-vad windows=1 speech_duration={:.1}s audio_duration={:.1}s",
+        output.duration_after_vad_cs as f64 / 100.0,
+        output.duration_cs as f64 / 100.0
+    );
+    eprintln!(
+        "transcribe_cue_timing = strategy={cue_timing} timed_words={} word_timed_windows={} fallback_windows={}",
+        output.words.len(),
+        usize::from(cue_timing == "word"),
+        usize::from(cue_timing != "word")
+    );
+    Ok(DecodedTranscript {
+        cues,
+        language: output.language,
+        fallback_language_used: false,
+        fallback_decoding_used: false,
+        decoding_strategy: "beam",
+        cue_timing,
+        segmentation_strategy: "silero-vad",
+        window_count: 1,
     })
 }
 
@@ -169,7 +405,8 @@ fn transcribe_to_cues(
     model_path: &Path,
     audio_path: &Path,
     language: Option<&str>,
-) -> Result<(Vec<SubtitleCue>, String, bool, bool, &'static str)> {
+    config: &TranscribeConfig,
+) -> Result<DecodedTranscript> {
     let reader = hound::WavReader::open(audio_path)
         .with_context(|| format!("failed to open extracted wav {}", audio_path.display()))?;
     let sample_rate = reader.spec().sample_rate as usize;
@@ -221,15 +458,20 @@ fn transcribe_to_cues(
             sample_rate,
             Some(attempt.language.as_str()),
             attempt.strategy,
+            config,
         )?;
         if !cues.is_empty() {
-            return Ok((
+            validate_cues(&cues, cue_policy(config))?;
+            return Ok(DecodedTranscript {
                 cues,
-                attempt.language,
-                attempt.fallback_language_used,
-                attempt.fallback_decoding_used,
-                attempt.strategy.label(),
-            ));
+                language: attempt.language,
+                fallback_language_used: attempt.fallback_language_used,
+                fallback_decoding_used: attempt.fallback_decoding_used,
+                decoding_strategy: attempt.strategy.label(),
+                cue_timing: attempt_diagnostics.cue_timing,
+                segmentation_strategy: attempt_diagnostics.segmentation_strategy,
+                window_count: attempt_diagnostics.window_count,
+            });
         }
         diagnostics.push(attempt_diagnostics);
     }
@@ -246,15 +488,20 @@ fn transcribe_to_cues(
                     sample_rate,
                     Some(attempt.language.as_str()),
                     attempt.strategy,
+                    config,
                 )?;
                 if !cues.is_empty() {
-                    return Ok((
+                    validate_cues(&cues, cue_policy(config))?;
+                    return Ok(DecodedTranscript {
                         cues,
-                        attempt.language,
-                        attempt.fallback_language_used,
-                        attempt.fallback_decoding_used,
-                        attempt.strategy.label(),
-                    ));
+                        language: attempt.language,
+                        fallback_language_used: attempt.fallback_language_used,
+                        fallback_decoding_used: attempt.fallback_decoding_used,
+                        decoding_strategy: attempt.strategy.label(),
+                        cue_timing: attempt_diagnostics.cue_timing,
+                        segmentation_strategy: attempt_diagnostics.segmentation_strategy,
+                        window_count: attempt_diagnostics.window_count,
+                    });
                 }
                 diagnostics.push(attempt_diagnostics);
             }
@@ -344,11 +591,26 @@ fn transcribe_attempt(
     sample_rate: usize,
     language: Option<&str>,
     strategy: DecodeStrategy,
+    config: &TranscribeConfig,
 ) -> Result<(Vec<SubtitleCue>, AttemptDiagnostics)> {
-    let chunks = audio_chunks(audio.len(), sample_rate, TRANSCRIPTION_CHUNK_SECONDS);
-    let mut cues = Vec::new();
+    let window_plan = transcription_windows(audio, sample_rate, config)?;
+    let chunks = window_plan.windows;
+    eprintln!(
+        "transcribe_segmentation = strategy={} windows={} speech_regions={} speech_threshold={} speech_coverage={:.1}%",
+        window_plan.strategy,
+        chunks.len(),
+        window_plan.speech_region_count,
+        window_plan
+            .speech_threshold
+            .map(|threshold| format!("{threshold:.5}"))
+            .unwrap_or_else(|| "n/a".to_string()),
+        window_plan.speech_coverage * 100.0
+    );
+    let mut cues_with_sources = Vec::new();
     let mut segment_count = 0usize;
     let mut non_empty_segments = 0usize;
+    let mut timed_word_count = 0usize;
+    let mut word_timed_windows = 0usize;
 
     for (index, chunk) in chunks.iter().enumerate() {
         if chunks.len() > 1 {
@@ -363,31 +625,59 @@ fn transcribe_attempt(
             );
         }
 
-        let offset_cs = samples_to_centiseconds(chunk.start, sample_rate);
-        let duration_cs = samples_to_centiseconds(chunk.len(), sample_rate);
-        let (mut chunk_cues, chunk_diagnostics) = transcribe_chunk(
+        let timing = ChunkTiming {
+            offset_cs: samples_to_centiseconds(chunk.start, sample_rate),
+            duration_cs: samples_to_centiseconds(chunk.len(), sample_rate),
+        };
+        let (mut current_cues, chunk_diagnostics) = transcribe_chunk(
             ctx,
             &audio[chunk.clone()],
             language,
             strategy,
-            offset_cs,
-            duration_cs,
+            timing,
+            WordCueOptions {
+                policy: cue_policy(config),
+                pause_split_cs: milliseconds_to_centiseconds(config.cues.pause_split_ms),
+            },
         )?;
         segment_count += chunk_diagnostics.segment_count;
         non_empty_segments += chunk_diagnostics.non_empty_segments;
-        cues.append(&mut chunk_cues);
+        timed_word_count += chunk_diagnostics.timed_word_count;
+        if chunk_diagnostics.cue_timing == "word" {
+            word_timed_windows += 1;
+        }
+        current_cues.retain_mut(|cue| constrain_cue_to_chunk(cue, index, &chunks, sample_rate));
+        append_boundary_cues(&mut cues_with_sources, current_cues, index);
     }
 
-    for (index, cue) in cues.iter_mut().enumerate() {
-        cue.index = index + 1;
-    }
+    let media_duration_cs = samples_to_centiseconds(audio.len(), sample_rate);
+    let cues = optimize_cues(
+        cues_with_sources.into_iter().map(|(_, cue)| cue).collect(),
+        media_duration_cs,
+        cue_policy(config),
+    );
+    let cue_timing = match (word_timed_windows, chunks.len()) {
+        (0, _) => "segment-fallback",
+        (word_timed, total) if word_timed == total => "word",
+        _ => "mixed",
+    };
+    eprintln!(
+        "transcribe_cue_timing = strategy={cue_timing} timed_words={timed_word_count} word_timed_windows={word_timed_windows} fallback_windows={}",
+        chunks.len().saturating_sub(word_timed_windows)
+    );
 
     Ok((
         cues,
         AttemptDiagnostics {
             language: language.unwrap_or("auto").to_string(),
             decoding_strategy: strategy.label(),
-            chunk_count: chunks.len(),
+            segmentation_strategy: window_plan.strategy,
+            window_count: chunks.len(),
+            speech_region_count: window_plan.speech_region_count,
+            speech_threshold: window_plan.speech_threshold,
+            speech_coverage: window_plan.speech_coverage,
+            cue_timing,
+            timed_word_count,
             segment_count,
             non_empty_segments,
         },
@@ -399,8 +689,8 @@ fn transcribe_chunk(
     audio: &[f32],
     language: Option<&str>,
     strategy: DecodeStrategy,
-    offset_cs: i64,
-    duration_cs: i64,
+    timing: ChunkTiming,
+    cue_options: WordCueOptions,
 ) -> Result<(Vec<SubtitleCue>, AttemptDiagnostics)> {
     let mut state = ctx
         .create_state()
@@ -417,6 +707,7 @@ fn transcribe_chunk(
     params.set_print_progress(false);
     params.set_print_realtime(false);
     params.set_print_timestamps(false);
+    params.set_token_timestamps(true);
     params.set_translate(false);
     params.set_language(language);
     // `detect_language=true` makes whisper.cpp return after detection without transcribing.
@@ -428,25 +719,188 @@ fn transcribe_chunk(
         .full(params, audio)
         .context("failed to transcribe audio with whisper")?;
 
-    collect_cues(&state, language, strategy, offset_cs, duration_cs)
+    collect_cues(
+        &state,
+        language,
+        strategy,
+        timing,
+        ctx.token_eot(),
+        cue_options,
+    )
 }
 
-fn audio_chunks(
-    sample_count: usize,
-    sample_rate: usize,
-    chunk_seconds: usize,
-) -> Vec<Range<usize>> {
-    let chunk_size = sample_rate.saturating_mul(chunk_seconds).max(1);
-    let mut chunks = Vec::new();
-    let mut start = 0usize;
+#[derive(Debug)]
+struct TranscriptionWindowPlan {
+    windows: Vec<Range<usize>>,
+    strategy: &'static str,
+    speech_region_count: usize,
+    speech_threshold: Option<f32>,
+    speech_coverage: f64,
+}
 
-    while start < sample_count {
-        let end = sample_count.min(start.saturating_add(chunk_size));
-        chunks.push(start..end);
-        start = end;
+fn transcription_windows(
+    audio: &[f32],
+    sample_rate: usize,
+    config: &TranscribeConfig,
+) -> Result<TranscriptionWindowPlan> {
+    let segmentation = &config.segmentation;
+    let overlap_seconds = usize::try_from(segmentation.overlap_seconds)
+        .context("transcribe overlap duration is too large for this platform")?;
+
+    if segmentation.mode == TranscribeSegmentationMode::Speech {
+        let options = SpeechWindowOptions {
+            min_speech_ms: usize::try_from(segmentation.min_speech_ms)
+                .context("minimum speech duration is too large for this platform")?,
+            min_silence_ms: usize::try_from(segmentation.min_silence_ms)
+                .context("minimum silence duration is too large for this platform")?,
+            padding_ms: usize::try_from(segmentation.padding_ms)
+                .context("speech padding is too large for this platform")?,
+            max_window_seconds: usize::try_from(segmentation.max_window_seconds)
+                .context("maximum speech window is too large for this platform")?,
+            overlap_seconds,
+        };
+        let speech_plan = speech_windows(audio, sample_rate, options);
+        let speech_coverage = speech_plan.speech_sample_count as f64 / audio.len().max(1) as f64;
+        if !speech_plan.windows.is_empty() {
+            return Ok(TranscriptionWindowPlan {
+                windows: speech_plan.windows,
+                strategy: "speech",
+                speech_region_count: speech_plan.speech_region_count,
+                speech_threshold: Some(speech_plan.threshold),
+                speech_coverage,
+            });
+        }
+
+        let chunk_seconds = usize::try_from(segmentation.chunk_seconds)
+            .context("transcribe chunk duration is too large for this platform")?;
+        return Ok(TranscriptionWindowPlan {
+            windows: fixed_windows(audio.len(), sample_rate, chunk_seconds, overlap_seconds),
+            strategy: "fixed-fallback",
+            speech_region_count: 0,
+            speech_threshold: Some(speech_plan.threshold),
+            speech_coverage,
+        });
     }
 
-    chunks
+    let chunk_seconds = usize::try_from(segmentation.chunk_seconds)
+        .context("transcribe chunk duration is too large for this platform")?;
+    Ok(TranscriptionWindowPlan {
+        windows: fixed_windows(audio.len(), sample_rate, chunk_seconds, overlap_seconds),
+        strategy: "fixed",
+        speech_region_count: 0,
+        speech_threshold: None,
+        speech_coverage: 0.0,
+    })
+}
+
+fn cue_belongs_to_chunk(
+    cue: &SubtitleCue,
+    chunk_index: usize,
+    chunks: &[Range<usize>],
+    sample_rate: usize,
+) -> bool {
+    let (lower_cs, upper_cs) = chunk_ownership_bounds(chunk_index, chunks, sample_rate);
+    let midpoint_cs = midpoint_i64(cue.start_cs, cue.end_cs);
+
+    midpoint_cs >= lower_cs && (chunk_index + 1 == chunks.len() || midpoint_cs < upper_cs)
+}
+
+fn constrain_cue_to_chunk(
+    cue: &mut SubtitleCue,
+    chunk_index: usize,
+    chunks: &[Range<usize>],
+    sample_rate: usize,
+) -> bool {
+    if !cue_belongs_to_chunk(cue, chunk_index, chunks, sample_rate) {
+        return false;
+    }
+
+    let (lower_cs, upper_cs) = chunk_ownership_bounds(chunk_index, chunks, sample_rate);
+    cue.start_cs = cue.start_cs.max(lower_cs);
+    cue.end_cs = cue.end_cs.min(upper_cs);
+    cue.end_cs > cue.start_cs
+}
+
+fn chunk_ownership_bounds(
+    chunk_index: usize,
+    chunks: &[Range<usize>],
+    sample_rate: usize,
+) -> (i64, i64) {
+    let lower_sample = if chunk_index == 0 {
+        chunks[chunk_index].start
+    } else {
+        midpoint(chunks[chunk_index - 1].end, chunks[chunk_index].start)
+    };
+    let upper_sample = if chunk_index + 1 == chunks.len() {
+        chunks[chunk_index].end
+    } else {
+        midpoint(chunks[chunk_index].end, chunks[chunk_index + 1].start)
+    };
+    let lower_cs = samples_to_centiseconds(lower_sample, sample_rate);
+    let upper_cs = samples_to_centiseconds(upper_sample, sample_rate);
+    (lower_cs, upper_cs)
+}
+
+fn midpoint(left: usize, right: usize) -> usize {
+    left.min(right).saturating_add(left.abs_diff(right) / 2)
+}
+
+fn midpoint_i64(left: i64, right: i64) -> i64 {
+    left.min(right)
+        .saturating_add(left.abs_diff(right) as i64 / 2)
+}
+
+fn append_boundary_cues(
+    target: &mut Vec<(usize, SubtitleCue)>,
+    source: Vec<SubtitleCue>,
+    chunk_index: usize,
+) {
+    for cue in source {
+        let cue_key = boundary_text_key(&cue.text);
+        if let Some((previous_chunk, previous)) = target.last_mut()
+            && *previous_chunk != chunk_index
+            && !cue_key.is_empty()
+            && boundary_texts_match(&boundary_text_key(&previous.text), &cue_key)
+            && cue.start_cs <= previous.end_cs.saturating_add(25)
+        {
+            previous.start_cs = previous.start_cs.min(cue.start_cs);
+            previous.end_cs = previous.end_cs.max(cue.end_cs);
+            if cue.text.chars().count() > previous.text.chars().count() {
+                previous.text = cue.text;
+            }
+            continue;
+        }
+        target.push((chunk_index, cue));
+    }
+}
+
+fn boundary_texts_match(previous: &str, current: &str) -> bool {
+    previous == current
+        || (previous.chars().count().min(current.chars().count()) >= 4
+            && (previous.contains(current) || current.contains(previous)))
+}
+
+fn boundary_text_key(text: &str) -> String {
+    text.chars()
+        .filter(|character| character.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn cue_policy(config: &TranscribeConfig) -> CuePolicy {
+    CuePolicy {
+        min_duration_cs: milliseconds_to_centiseconds(config.cues.min_duration_ms),
+        max_duration_cs: milliseconds_to_centiseconds(config.cues.max_duration_ms),
+        end_padding_cs: milliseconds_to_centiseconds(config.cues.end_padding_ms),
+        max_chars_per_line: config.cues.max_chars_per_line,
+        max_cjk_chars_per_line: config.cues.max_cjk_chars_per_line,
+        max_lines: config.cues.max_lines,
+    }
+}
+
+fn milliseconds_to_centiseconds(milliseconds: u64) -> i64 {
+    let centiseconds = milliseconds.saturating_add(9) / 10;
+    centiseconds.min(i64::MAX as u64) as i64
 }
 
 fn samples_to_centiseconds(sample_count: usize, sample_rate: usize) -> i64 {
@@ -457,10 +911,12 @@ fn collect_cues(
     state: &whisper_rs::WhisperState,
     language: Option<&str>,
     strategy: DecodeStrategy,
-    offset_cs: i64,
-    duration_cs: i64,
+    timing: ChunkTiming,
+    token_eot: i32,
+    cue_options: WordCueOptions,
 ) -> Result<(Vec<SubtitleCue>, AttemptDiagnostics)> {
-    let mut cues = Vec::new();
+    let mut segment_cues = Vec::new();
+    let mut timed_words = Vec::new();
     let mut segment_count = 0usize;
     for (index, segment) in state.as_iter().enumerate() {
         segment_count += 1;
@@ -476,29 +932,169 @@ fn collect_cues(
         if let Some((start_cs, end_cs)) = clamp_segment_to_chunk(
             segment.start_timestamp(),
             segment.end_timestamp(),
-            offset_cs,
-            duration_cs,
+            timing.offset_cs,
+            timing.duration_cs,
         ) {
-            cues.push(SubtitleCue {
+            segment_cues.push(SubtitleCue {
                 index: index + 1,
                 start_cs,
                 end_cs,
                 text,
             });
         }
+
+        collect_segment_timed_words(
+            &segment,
+            token_eot,
+            timing.offset_cs,
+            timing.duration_cs,
+            &mut timed_words,
+        )?;
     }
 
-    let non_empty_segments = cues.len();
+    let timed_cues =
+        build_cues_from_timed_words(&timed_words, cue_options.policy, cue_options.pause_split_cs);
+    let word_text_matches = transcript_text_key(
+        &timed_words
+            .iter()
+            .map(|word| word.text.as_str())
+            .collect::<String>(),
+    ) == transcript_text_key(
+        &segment_cues
+            .iter()
+            .map(|cue| cue.text.as_str())
+            .collect::<String>(),
+    );
+    let non_empty_segments = segment_cues.len();
+    let (cues, cue_timing) = if !timed_cues.is_empty() && word_text_matches {
+        (timed_cues, "word")
+    } else {
+        (segment_cues, "segment-fallback")
+    };
     Ok((
         cues,
         AttemptDiagnostics {
             language: language.unwrap_or("auto").to_string(),
             decoding_strategy: strategy.label(),
-            chunk_count: 1,
+            segmentation_strategy: "window",
+            window_count: 1,
+            speech_region_count: 0,
+            speech_threshold: None,
+            speech_coverage: 0.0,
+            cue_timing,
+            timed_word_count: timed_words.len(),
             segment_count,
             non_empty_segments,
         },
     ))
+}
+
+fn collect_segment_timed_words(
+    segment: &whisper_rs::WhisperSegment<'_>,
+    token_eot: i32,
+    chunk_offset_cs: i64,
+    chunk_duration_cs: i64,
+    target: &mut Vec<TimedWord>,
+) -> Result<()> {
+    let mut pending_bytes = Vec::new();
+    let mut pending_start_cs = None;
+    let mut pending_end_cs = None;
+
+    for token_index in 0..segment.n_tokens() {
+        let Some(token) = segment.get_token(token_index) else {
+            continue;
+        };
+        if token.token_id() >= token_eot {
+            continue;
+        }
+        let token_data = token.token_data();
+        let Some((start_cs, end_cs)) = clamp_token_to_chunk(
+            token_data.t0,
+            token_data.t1,
+            chunk_offset_cs,
+            chunk_duration_cs,
+        ) else {
+            continue;
+        };
+        let bytes = token
+            .to_bytes()
+            .context("failed to decode whisper token text")?;
+        if bytes.is_empty() {
+            continue;
+        }
+
+        pending_bytes.extend_from_slice(bytes);
+        pending_start_cs.get_or_insert(start_cs);
+        pending_end_cs = Some(pending_end_cs.map_or(end_cs, |end: i64| end.max(end_cs)));
+        match std::str::from_utf8(&pending_bytes) {
+            Ok(text) => {
+                if !text.is_empty() {
+                    target.push(TimedWord {
+                        start_cs: pending_start_cs.unwrap_or(start_cs),
+                        end_cs: pending_end_cs.unwrap_or(end_cs),
+                        text: text.to_string(),
+                    });
+                }
+                pending_bytes.clear();
+                pending_start_cs = None;
+                pending_end_cs = None;
+            }
+            Err(error) if error.error_len().is_none() => {}
+            Err(_) => {
+                pending_bytes.clear();
+                pending_start_cs = None;
+                pending_end_cs = None;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn transcript_text_key(text: &str) -> String {
+    let mut key = String::new();
+    let mut pending_space = false;
+    let mut previous_was_ascii_alphanumeric = false;
+
+    for character in text.chars() {
+        if character.is_whitespace() {
+            pending_space = true;
+            continue;
+        }
+        if !character.is_alphanumeric() {
+            continue;
+        }
+
+        let current_is_ascii_alphanumeric = character.is_ascii_alphanumeric();
+        if pending_space && previous_was_ascii_alphanumeric && current_is_ascii_alphanumeric {
+            key.push(' ');
+        }
+        key.extend(character.to_lowercase());
+        pending_space = false;
+        previous_was_ascii_alphanumeric = current_is_ascii_alphanumeric;
+    }
+
+    key
+}
+
+fn clamp_token_to_chunk(
+    token_start_cs: i64,
+    token_end_cs: i64,
+    chunk_offset_cs: i64,
+    chunk_duration_cs: i64,
+) -> Option<(i64, i64)> {
+    let chunk_end_cs = chunk_offset_cs.saturating_add(chunk_duration_cs.max(0));
+    let start_cs = chunk_offset_cs
+        .saturating_add(token_start_cs)
+        .clamp(chunk_offset_cs, chunk_end_cs);
+    if start_cs >= chunk_end_cs {
+        return None;
+    }
+    let end_cs = chunk_offset_cs
+        .saturating_add(token_end_cs)
+        .clamp(chunk_offset_cs, chunk_end_cs)
+        .max(start_cs.saturating_add(1).min(chunk_end_cs));
+    (end_cs > start_cs).then_some((start_cs, end_cs))
 }
 
 fn clamp_segment_to_chunk(
@@ -539,10 +1135,14 @@ fn resolve_language(cli_lang: Option<&str>, config_lang: Option<&str>) -> Result
 #[cfg(test)]
 mod tests {
     use super::{
-        AttemptDiagnostics, AttemptPlan, DecodeStrategy, audio_chunks, build_attempts,
-        clamp_segment_to_chunk, detected_language_attempts, detection_audio, resolve_language,
-        samples_to_centiseconds,
+        AttemptDiagnostics, AttemptPlan, DecodeStrategy, append_boundary_cues,
+        apply_transcribe_overrides, build_attempts, clamp_segment_to_chunk, clamp_token_to_chunk,
+        constrain_cue_to_chunk, cue_belongs_to_chunk, detected_language_attempts, detection_audio,
+        resolve_language, samples_to_centiseconds, transcript_text_key, transcription_windows,
     };
+    use crate::config::{TranscribeEngine, TranscribeSegmentationMode, default_config};
+    use crate::segmentation::fixed_windows;
+    use crate::subtitles::SubtitleCue;
 
     #[test]
     fn cli_language_overrides_config_language() {
@@ -566,6 +1166,23 @@ mod tests {
     }
 
     #[test]
+    fn engine_override_selects_a_compatible_default_model() {
+        let mut config = default_config()
+            .expect("default config should build")
+            .transcribe;
+        apply_transcribe_overrides(&mut config, Some("faster-whisper".to_string()), None, None)
+            .expect("faster-whisper override should be valid");
+
+        assert_eq!(config.engine, TranscribeEngine::FasterWhisper);
+        assert_eq!(config.model.id, "large-v3-turbo");
+
+        apply_transcribe_overrides(&mut config, Some("whisper-rs".to_string()), None, None)
+            .expect("whisper-rs override should be valid");
+        assert_eq!(config.engine, TranscribeEngine::WhisperRs);
+        assert_eq!(config.model.id, "base");
+    }
+
+    #[test]
     fn decode_strategy_labels_are_stable() {
         assert_eq!(DecodeStrategy::BeamSearch.label(), "beam");
         assert_eq!(DecodeStrategy::Greedy.label(), "greedy");
@@ -576,14 +1193,24 @@ mod tests {
         let diagnostics = AttemptDiagnostics {
             language: "zh".to_string(),
             decoding_strategy: "beam",
-            chunk_count: 2,
+            segmentation_strategy: "speech",
+            window_count: 2,
+            speech_region_count: 2,
+            speech_threshold: Some(0.01),
+            speech_coverage: 0.75,
+            cue_timing: "word",
+            timed_word_count: 12,
             segment_count: 4,
             non_empty_segments: 1,
         };
         let summary = diagnostics.summary();
         assert!(summary.contains("language=zh"));
         assert!(summary.contains("decoding=beam"));
-        assert!(summary.contains("chunks=2"));
+        assert!(summary.contains("segmentation=speech"));
+        assert!(summary.contains("windows=2"));
+        assert!(summary.contains("speech_coverage=75.0%"));
+        assert!(summary.contains("cue_timing=word"));
+        assert!(summary.contains("timed_words=12"));
         assert!(summary.contains("blank_segments=3"));
     }
 
@@ -673,13 +1300,119 @@ mod tests {
     }
 
     #[test]
-    fn audio_chunks_bound_long_input() {
-        let chunks = audio_chunks(16_000 * 75, 16_000, 30);
+    fn fixed_windows_bound_long_input() {
+        let chunks = fixed_windows(16_000 * 75, 16_000, 30, 2);
 
         assert_eq!(
             chunks,
-            vec![0..480_000, 480_000..960_000, 960_000..1_200_000]
+            vec![0..480_000, 448_000..928_000, 896_000..1_200_000]
         );
+    }
+
+    #[test]
+    fn speech_segmentation_falls_back_for_undetected_audio() {
+        let config = default_config().expect("default config should build");
+        let plan = transcription_windows(&vec![0.0; 7_500], 100, &config.transcribe)
+            .expect("window plan should build");
+
+        assert_eq!(plan.strategy, "fixed-fallback");
+        assert_eq!(plan.windows, vec![0..3_000, 2_800..5_800, 5_600..7_500]);
+    }
+
+    #[test]
+    fn speech_and_fixed_segmentation_modes_are_explicit() {
+        let mut config = default_config().expect("default config should build");
+        let mut audio = vec![0.0; 1_000];
+        audio[200..400].fill(0.1);
+
+        let speech_plan = transcription_windows(&audio, 100, &config.transcribe)
+            .expect("speech window plan should build");
+        assert_eq!(speech_plan.strategy, "speech");
+        assert_eq!(speech_plan.windows, vec![170..430]);
+
+        config.transcribe.segmentation.mode = TranscribeSegmentationMode::Fixed;
+        let fixed_plan = transcription_windows(&audio, 100, &config.transcribe)
+            .expect("fixed window plan should build");
+        assert_eq!(fixed_plan.strategy, "fixed");
+        assert_eq!(fixed_plan.windows, vec![0..1_000]);
+    }
+
+    #[test]
+    fn overlap_ownership_assigns_boundary_to_one_chunk() {
+        let chunks = fixed_windows(75, 1, 30, 2);
+        let boundary_cue = SubtitleCue {
+            index: 1,
+            start_cs: 2_850,
+            end_cs: 2_950,
+            text: "boundary".to_string(),
+        };
+
+        assert!(!cue_belongs_to_chunk(&boundary_cue, 0, &chunks, 1));
+        assert!(cue_belongs_to_chunk(&boundary_cue, 1, &chunks, 1));
+
+        let mut clipped = SubtitleCue {
+            index: 1,
+            start_cs: 2_800,
+            end_cs: 3_400,
+            text: "owned by the second chunk".to_string(),
+        };
+        assert!(constrain_cue_to_chunk(&mut clipped, 1, &chunks, 1));
+        assert_eq!(clipped.start_cs, 2_900);
+        assert_eq!(clipped.end_cs, 3_400);
+    }
+
+    #[test]
+    fn repeated_boundary_cues_are_deduplicated() {
+        let mut cues = vec![(
+            0,
+            SubtitleCue {
+                index: 1,
+                start_cs: 2_800,
+                end_cs: 2_920,
+                text: "Hello".to_string(),
+            },
+        )];
+        append_boundary_cues(
+            &mut cues,
+            vec![SubtitleCue {
+                index: 1,
+                start_cs: 2_900,
+                end_cs: 3_000,
+                text: "hello!".to_string(),
+            }],
+            1,
+        );
+
+        assert_eq!(cues.len(), 1);
+        assert_eq!(cues[0].1.start_cs, 2_800);
+        assert_eq!(cues[0].1.end_cs, 3_000);
+    }
+
+    #[test]
+    fn contained_boundary_suffix_is_deduplicated() {
+        let mut cues = vec![(
+            3,
+            SubtitleCue {
+                index: 1,
+                start_cs: 10_700,
+                end_cs: 11_300,
+                text: "只有在异常输入中保持稳定才真正适合日常使用".to_string(),
+            },
+        )];
+        append_boundary_cues(
+            &mut cues,
+            vec![SubtitleCue {
+                index: 1,
+                start_cs: 11_300,
+                end_cs: 11_500,
+                text: "才真正适合日常使用".to_string(),
+            }],
+            4,
+        );
+
+        assert_eq!(cues.len(), 1);
+        assert_eq!(cues[0].1.end_cs, 11_500);
+        assert!(cues[0].1.text.starts_with("只有"));
     }
 
     #[test]
@@ -698,6 +1431,29 @@ mod tests {
         assert_eq!(
             clamp_segment_to_chunk(-100, 200, 3_000, 3_000),
             Some((3_000, 3_200))
+        );
+    }
+
+    #[test]
+    fn token_timestamps_gain_chunk_offset_and_minimum_duration() {
+        assert_eq!(
+            clamp_token_to_chunk(10, 20, 3_000, 500),
+            Some((3_010, 3_020))
+        );
+        assert_eq!(
+            clamp_token_to_chunk(30, 30, 3_000, 500),
+            Some((3_030, 3_031))
+        );
+        assert_eq!(clamp_token_to_chunk(500, 510, 3_000, 500), None);
+    }
+
+    #[test]
+    fn timed_token_integrity_preserves_latin_word_spacing() {
+        assert_eq!(transcript_text_key(" Hello   world. "), "hello world");
+        assert_eq!(transcript_text_key("Hello, world."), "hello world");
+        assert_ne!(
+            transcript_text_key("Hello world"),
+            transcript_text_key("Helloworld")
         );
     }
 }
