@@ -85,6 +85,10 @@ pub fn write_bootstrap_markdown(paths: &ConfigPaths, config: &Config) -> Result<
 2. Place or link the lilaccaps skill at the configured skill path, or let `lilaccaps install` generate it.\n\
 3. Run `lilaccaps install` to initialize config, runtime folders, the model, and the generated skill file.\n\
 4. Run `lilaccaps doctor` or `lilaccaps status` to verify config and integration health.\n\n\
+## Version and updates\n\
+- `lilaccaps --version` always prints the installed version first\n\
+- when a newer stable semantic version is available, it also prints `new_version` and recommends `lilaccaps update`\n\
+- the short release check fails open, so offline access does not prevent local version reporting\n\n\
 ## Transcription language behavior\n\
 - `transcribe.language = \"auto\"` samples the first 30 seconds for language detection and then transcribes with the detected language explicitly\n\
 - `lilaccaps transcribe --lang <code>` forces a language for that run\n\
@@ -172,7 +176,7 @@ pub fn ensure_skill_file(config: &Config) -> Result<PathBuf> {
     );
     let content = content.replace(
         "- `lilaccaps transcribe <input> --lang <code>`",
-        "- `lilaccaps transcribe <input> --lang <code>`\n- `lilaccaps transcribe <input> --engine faster-whisper --model large-v3-turbo --lang <code>`\n- `lilaccaps transcribe <input> --cleanup`",
+        "- `lilaccaps --version`\n- `lilaccaps transcribe <input> --lang <code>`\n- `lilaccaps transcribe <input> --engine faster-whisper --model large-v3-turbo --lang <code>`\n- `lilaccaps transcribe <input> --cleanup`",
     );
     let content = content.replace(
         "- local speech-aware segmentation bridges short pauses, ignores short noise, pads speech, omits long silence, and uses bounded overlapping windows for continuous speech.",
@@ -181,6 +185,10 @@ pub fn ensure_skill_file(config: &Config) -> Result<PathBuf> {
     let content = content.replace(
         "- `transcribe.language = \"auto\"` samples the first 30 seconds for language detection and then transcribes with that detected language explicitly.",
         "- `transcribe.language = \"auto\"` enables engine-specific automatic language detection.",
+    );
+    let content = content.replace(
+        "- transcription is a separate workflow.",
+        "- transcription is a separate workflow.\n- `lilaccaps --version` always shows the installed version and recommends `lilaccaps update` only when a newer stable release is confirmed.",
     );
 
     atomic_write(skill_path, content)

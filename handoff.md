@@ -1,9 +1,20 @@
 # lilaccaps Handoff
 
+## Unreleased
+
+- Replaced the root Clap-only `--version` response with a fail-open release-aware report. It always
+  prints the installed version first, uses a five-second stable-release lookup, and only adds
+  `new_version` plus a `lilaccaps update` recommendation when semantic-version comparison confirms
+  an upgrade.
+- Kept `-V` equivalent to `--version`; malformed release tags and network/API failures quietly fall
+  back to the installed-version line.
+- Added focused root-argument and semantic-version comparison tests and synchronized the README,
+  quick-start skill, generated integration guidance, and product plan.
+
 ## Current Objective
 
-Prepare `v0.1.20` with all five transcription-quality phases complete. Keep transcription,
-translation, burn-in, and watermarking as separate commands.
+Maintain the post-`v0.1.20` CLI and prepare the next `v0.1.x` release from reviewed unreleased work.
+Keep transcription, translation, burn-in, and watermarking as separate commands.
 
 ## v0.1.20 Transcription Quality Work
 

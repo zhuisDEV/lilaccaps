@@ -24,6 +24,14 @@ struct GitHubRelease {
 }
 
 pub fn latest_release(repo: Option<&str>) -> Result<Option<ReleaseInfo>> {
+    latest_release_with_timeouts(repo, Duration::from_secs(15), Duration::from_secs(60))
+}
+
+pub fn latest_release_with_timeouts(
+    repo: Option<&str>,
+    connect_timeout: Duration,
+    timeout: Duration,
+) -> Result<Option<ReleaseInfo>> {
     let fallback;
     let repo = match repo {
         Some(repo) => repo,
@@ -36,8 +44,8 @@ pub fn latest_release(repo: Option<&str>) -> Result<Option<ReleaseInfo>> {
     let url = format!("https://api.github.com/repos/{normalized}/releases/latest");
     let client = Client::builder()
         .user_agent(format!("lilaccaps/{}", env!("CARGO_PKG_VERSION")))
-        .connect_timeout(Duration::from_secs(15))
-        .timeout(Duration::from_secs(60))
+        .connect_timeout(connect_timeout)
+        .timeout(timeout)
         .build()
         .context("failed to construct GitHub release client")?;
 

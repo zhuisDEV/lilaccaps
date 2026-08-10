@@ -32,9 +32,14 @@ Do not hide transcription, translation, and burn-in inside one command unless th
 Run this first when unsure:
 
 ```bash
+lilaccaps --version
 lilaccaps status
 lilaccaps doctor
 ```
+
+`lilaccaps --version` always reports the installed version. If a newer stable release is available,
+it also reports `new_version` and recommends `lilaccaps update`; an unavailable release check does
+not make the command fail.
 
 Healthy status should include `healthy = true`, `config_valid = true`, `model_ready = true`, and `missing = none`.
 Dependency entries include the resolved executable path, detected version, and any startup error. Use `lilaccaps doctor --fix`

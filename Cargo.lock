@@ -811,6 +811,7 @@ dependencies = [
  "hound",
  "num_cpus",
  "reqwest",
+ "semver",
  "serde",
  "serde_json",
  "toml",

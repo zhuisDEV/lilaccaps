@@ -13,6 +13,8 @@
 
 The command model stays explicit:
 
+- `lilaccaps --version` reports the installed version and recommends `lilaccaps update` when a newer
+  stable release is available
 - `lilaccaps doctor` inspects local prerequisites and setup health
 - `lilaccaps doctor --fix` installs or repairs unhealthy macOS packages through Homebrew
 - `lilaccaps update` updates managed Homebrew dependencies before updating the CLI
@@ -148,6 +150,17 @@ After installation, `lilaccaps status` reports:
 - release-check errors separately from the last known version fields
 
 ## Update
+
+Check the installed version and whether a newer stable release is available:
+
+```bash
+lilaccaps --version
+```
+
+The installed version is always printed first. When the release check confirms a newer semantic
+version, the command also prints `new_version` and recommends `lilaccaps update`. The release check
+uses a short timeout and fails open, so offline or unavailable GitHub access never prevents the
+installed version from being reported.
 
 Update lilaccaps and its managed runtime dependencies:
 

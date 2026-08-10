@@ -10,6 +10,7 @@ owns one explicit artifact transformation; lifecycle work remains separate from 
 Implemented commands:
 
 ```text
+lilaccaps --version
 lilaccaps doctor [--fix]
 lilaccaps install [--fix]
 lilaccaps update [--skip-dependencies]
@@ -23,6 +24,7 @@ lilaccaps watermark <video> (--text <text> | --image <path>) [--output <video>]
 
 Current capabilities:
 
+- fail-open installed-version reporting with stable-release comparison and update guidance
 - local `whisper-rs` and uv-managed faster-whisper transcription with automatic or explicit
   language selection
 - overlapping transcription windows with deterministic boundary ownership and deduplication

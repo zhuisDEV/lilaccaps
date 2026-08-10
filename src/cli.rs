@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -161,7 +162,11 @@ pub struct TranslateArgs {
 }
 
 pub fn run() -> Result<()> {
-    let cli = Cli::parse();
+    let args = std::env::args_os().collect::<Vec<_>>();
+    if is_root_version_request(&args) {
+        return commands::version::run();
+    }
+    let cli = Cli::parse_from(args);
 
     match cli.command {
         Command::Doctor(args) => commands::doctor::run(args),
@@ -173,5 +178,37 @@ pub fn run() -> Result<()> {
         Command::Translate(args) => commands::translate::run(args),
         Command::Burnin(args) => commands::burnin::run(args),
         Command::Watermark(args) => commands::watermark::run(args),
+    }
+}
+
+fn is_root_version_request(args: &[OsString]) -> bool {
+    matches!(args, [_, flag] if flag == "--version" || flag == "-V")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+
+    use super::is_root_version_request;
+
+    #[test]
+    fn intercepts_only_exact_root_version_requests() {
+        assert!(is_root_version_request(&[
+            OsString::from("lilaccaps"),
+            OsString::from("--version"),
+        ]));
+        assert!(is_root_version_request(&[
+            OsString::from("lilaccaps"),
+            OsString::from("-V"),
+        ]));
+        assert!(!is_root_version_request(&[
+            OsString::from("lilaccaps"),
+            OsString::from("status"),
+        ]));
+        assert!(!is_root_version_request(&[
+            OsString::from("lilaccaps"),
+            OsString::from("--version"),
+            OsString::from("status"),
+        ]));
     }
 }
