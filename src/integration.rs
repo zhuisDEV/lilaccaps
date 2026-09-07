@@ -103,6 +103,7 @@ pub fn write_bootstrap_markdown(paths: &ConfigPaths, config: &Config) -> Result<
 - `--engine faster-whisper --model large-v3-turbo` uses the uv-managed faster-whisper 1.2.1 helper, Silero VAD, and word timestamps\n\
 - `whisper-rs` remains the default and requires no Python runtime; both engines feed the same timing optimizer and SRT QA\n\
 - `--cleanup` sends subtitle text only to the configured Codex provider, preserves cue count/order/timestamps, rejects large rewrites, and fails closed\n\
+- `transcribe.cleanup.reasoning_effort` defaults to `medium` and is passed explicitly to Codex, overriding its global reasoning setting; use an effort supported by the cleanup model\n\
 - leave cleanup disabled when subtitle text is private or must stay fully local\n\n\
 ## Burn-in style behavior\n\
 - `burnin.advanced_styling = true` enables per-line styling, custom spacing, and configured custom colours; set it to `false` to ignore those configured advanced settings and prefer the primary ffmpeg subtitle path when available; CLI `--colour` still overrides config for one run\n\
@@ -183,7 +184,7 @@ pub fn ensure_skill_file(config: &Config) -> Result<PathBuf> {
     );
     let content = content.replace(
         "- local speech-aware segmentation bridges short pauses, ignores short noise, pads speech, omits long silence, and uses bounded overlapping windows for continuous speech.",
-        "- `whisper-rs` is the default engine and uses local speech-aware overlapping windows.\n- faster-whisper is the higher-quality opt-in engine and requires `uv`; it uses `large-v3-turbo`/`large-v3`, Silero VAD, and word timestamps.\n- `--cleanup` is optional and sends subtitle text to Codex; it preserves structure, rejects large rewrites, and fails closed.",
+        "- `whisper-rs` is the default engine and uses local speech-aware overlapping windows.\n- faster-whisper is the higher-quality opt-in engine and requires `uv`; it uses `large-v3-turbo`/`large-v3`, Silero VAD, and word timestamps.\n- `--cleanup` is optional and sends subtitle text to Codex; it preserves structure, rejects large rewrites, and fails closed. `transcribe.cleanup.reasoning_effort` defaults to `medium` and explicitly overrides global Codex reasoning; choose an effort supported by the cleanup model.",
     );
     let content = content.replace(
         "- `transcribe.language = \"auto\"` samples the first 30 seconds for language detection and then transcribes with that detected language explicitly.",

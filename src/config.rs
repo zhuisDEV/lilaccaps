@@ -129,6 +129,8 @@ pub struct TranscribeCleanupConfig {
     pub command: String,
     #[serde(default = "default_transcribe_cleanup_model")]
     pub model: String,
+    #[serde(default = "default_transcribe_cleanup_reasoning_effort")]
+    pub reasoning_effort: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -346,6 +348,10 @@ pub fn default_transcribe_cleanup_command() -> String {
     "codex".to_string()
 }
 
+pub fn default_transcribe_cleanup_reasoning_effort() -> String {
+    "medium".to_string()
+}
+
 pub fn default_transcribe_cleanup_model() -> String {
     "gpt-5.6-terra".to_string()
 }
@@ -438,6 +444,7 @@ impl Default for TranscribeCleanupConfig {
             enabled: false,
             command: default_transcribe_cleanup_command(),
             model: default_transcribe_cleanup_model(),
+            reasoning_effort: default_transcribe_cleanup_reasoning_effort(),
         }
     }
 }
@@ -587,6 +594,11 @@ pub fn validate_transcribe_config(config: &TranscribeConfig) -> Result<()> {
                 config.cleanup.command
             );
         }
+        if config.cleanup.reasoning_effort.trim().is_empty() {
+            anyhow::bail!(
+                "transcribe.cleanup.reasoning_effort must not be empty when cleanup is enabled"
+            );
+        }
         if config.cleanup.model.trim().is_empty() {
             anyhow::bail!("transcribe.cleanup.model must not be empty when cleanup is enabled");
         }
@@ -650,6 +662,27 @@ mod tests {
     }
 
     #[test]
+    fn cleanup_reasoning_defaults_and_overrides_round_trip() {
+        let legacy: super::TranscribeCleanupConfig =
+            toml::from_str("enabled = true\nmodel = \"gpt-5.6-terra\"\n").unwrap();
+        assert_eq!(legacy.reasoning_effort, "medium");
+        let mut custom = legacy;
+        custom.reasoning_effort = "high".into();
+        let decoded: super::TranscribeCleanupConfig =
+            toml::from_str(&toml::to_string(&custom).unwrap()).unwrap();
+        assert_eq!(decoded.reasoning_effort, "high");
+        let mut config = default_config().unwrap();
+        config.transcribe.cleanup.enabled = true;
+        config.transcribe.cleanup.reasoning_effort = " ".into();
+        assert!(
+            validate_transcribe_config(&config.transcribe)
+                .unwrap_err()
+                .to_string()
+                .contains("reasoning_effort")
+        );
+    }
+
+    #[test]
     fn expands_tilde_paths() {
         let expanded = expand_home(Path::new("~/demo")).expect("tilde path should expand");
         assert!(expanded.ends_with("demo"));
@@ -683,6 +716,7 @@ mod tests {
         assert_eq!(config.transcribe.cues.end_padding_ms, 150);
         assert_eq!(config.transcribe.cues.pause_split_ms, 500);
         assert!(!config.transcribe.cleanup.enabled);
+        assert_eq!(config.transcribe.cleanup.reasoning_effort, "medium");
         assert_eq!(config.transcribe.cleanup.command, "codex");
         assert_eq!(config.transcribe.cleanup.model, "gpt-5.6-terra");
         assert_eq!(config.burnin.font, "auto");
@@ -750,6 +784,7 @@ id = "base"
         assert_eq!(config.transcribe.cues.max_lines, 2);
         assert_eq!(config.transcribe.cues.pause_split_ms, 500);
         assert!(!config.transcribe.cleanup.enabled);
+        assert_eq!(config.transcribe.cleanup.reasoning_effort, "medium");
         assert_eq!(config.burnin.font, "auto");
         assert_eq!(config.burnin.colour, "auto");
         assert_eq!(config.burnin.size, 0);

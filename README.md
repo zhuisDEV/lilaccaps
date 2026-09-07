@@ -315,6 +315,7 @@ Important values:
 - `transcribe.cleanup.enabled`
 - `transcribe.cleanup.command`
 - `transcribe.cleanup.model`
+- `transcribe.cleanup.reasoning_effort`
 - `translate.command`
 - `translate.model`
 - `translate.reasoning_effort`
@@ -442,6 +443,7 @@ max_lines = 2
 enabled = false
 command = "codex"
 model = "gpt-5.6-terra"
+reasoning_effort = "medium"
 ```
 
 To make the higher-quality engine persistent, set both engine and model:
@@ -458,6 +460,10 @@ Omit `transcribe.model.path` to use the managed model cache. An explicit path is
 already-downloaded local model directory.
 
 ### Optional conservative text cleanup
+
+`transcribe.cleanup.reasoning_effort` defaults to `"medium"` and is always passed explicitly
+to Codex, overriding its global reasoning default. Set a reasoning level supported by your
+chosen cleanup model (for example, `"low"`, `"medium"`, or `"high"`).
 
 `--cleanup` enables a final text-only Codex pass after local transcription and timing optimization.
 Use `--cleanup MODEL` to override the configured cleanup model for one run. The subprocess uses

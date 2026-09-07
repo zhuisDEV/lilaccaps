@@ -167,6 +167,7 @@ id = "medium"
 enabled = false
 command = "codex"
 model = "gpt-5.6-terra"
+reasoning_effort = "medium"
 
 [translate]
 command = "codex"
@@ -188,6 +189,10 @@ enabled = true
 colour = "black"
 width = 2
 ```
+
+`transcribe.cleanup.reasoning_effort` defaults to `"medium"` and overrides the global Codex
+reasoning setting. Choose an effort supported by the cleanup model. Cleanup remains disabled
+by default and uses Terra unless its model is overridden.
 
 `translate.model` also accepts `openai/gpt-5.6-luna`. `translate.reasoning_effort` accepts
 `low`, `medium`, `high`, `xhigh`, or `max`; it is passed explicitly to Codex. Existing `gemini-*`

@@ -83,6 +83,11 @@ pub fn clean_cues(
         .arg(output_path.path())
         .arg("--model")
         .arg(model)
+        .arg("--config")
+        .arg(format!(
+            "model_reasoning_effort={}",
+            toml::Value::String(config.reasoning_effort.clone())
+        ))
         .arg("-")
         .current_dir(workdir.path())
         .stdin(Stdio::piped())
@@ -330,6 +335,12 @@ mod tests {
         fs::write(
             &command,
             r#"#!/bin/sh
+effort=''
+for arg in "$@"; do
+  case "$arg" in model_reasoning_effort=*) effort="$arg" ;; esac
+done
+expected=$(cat ../expected-effort)
+[ "$effort" = "model_reasoning_effort=\"$expected\"" ] || exit 9
 output=''
 while [ "$#" -gt 0 ]; do
   if [ "$1" = '--output-last-message' ]; then
@@ -352,12 +363,19 @@ printf '%s' '{"cues":[{"index":1,"text":"Hello, world."}]}' > "$output"
             enabled: true,
             command: command.to_string_lossy().into_owned(),
             model: "test-model".to_string(),
+            ..TranscribeCleanupConfig::default()
         };
 
-        let cleaned = clean_cues(runtime.path(), "en", &config, &source_cues())
-            .expect("mock cleanup should succeed");
-        assert_eq!(cleaned[0].text, "Hello, world.");
-        assert_eq!(cleaned[0].start_cs, 100);
-        assert_eq!(cleaned[0].end_cs, 200);
+        let mut config = config;
+        fs::create_dir_all(runtime.path().join("tmp")).unwrap();
+        for effort in ["medium", "high"] {
+            config.reasoning_effort = effort.to_string();
+            fs::write(runtime.path().join("tmp/expected-effort"), effort).unwrap();
+            let cleaned = clean_cues(runtime.path(), "en", &config, &source_cues())
+                .expect("mock cleanup should succeed");
+            assert_eq!(cleaned[0].text, "Hello, world.");
+            assert_eq!(cleaned[0].start_cs, 100);
+            assert_eq!(cleaned[0].end_cs, 200);
+        }
     }
 }
