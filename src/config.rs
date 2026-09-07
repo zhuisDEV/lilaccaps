@@ -7,13 +7,12 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::integration::default_skill_path;
-use crate::release::{default_github_repo, infer_github_repo};
+use crate::release::default_github_repo;
 use crate::runtime::atomic_write;
 
 const DEFAULT_RUNTIME_HOME: &str = "~/.lilac/lilaccaps";
 const CONFIG_FILE_NAME: &str = "lilaccaps.toml";
-const LEGACY_TRANSLATE_MODEL: &str = "gemini-3.1-flash-lite-preview";
-const DEFAULT_TRANSLATE_MODEL: &str = "gemini-3.1-flash-lite";
+const DEFAULT_TRANSLATE_MODEL: &str = "gpt-5.6-luna";
 
 #[derive(Debug, Clone)]
 pub struct ConfigPaths {
@@ -158,6 +157,10 @@ pub struct BurninConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranslateConfig {
+    #[serde(default = "default_transcribe_cleanup_command")]
+    pub command: String,
+    #[serde(default = "default_translate_reasoning_effort")]
+    pub reasoning_effort: String,
     #[serde(default = "default_translate_model")]
     pub model: String,
     #[serde(default = "default_translate_append")]
@@ -218,9 +221,10 @@ pub fn load_or_init_config(override_path: Option<PathBuf>) -> Result<LoadedConfi
 }
 
 pub fn load_config(override_path: Option<PathBuf>) -> Result<LoadedConfig> {
+    let explicit_path = override_path.is_some();
     let config_path = override_path.unwrap_or(default_config_path()?);
     let created = false;
-    let config = if config_path.exists() {
+    let config = if explicit_path || config_path.exists() {
         let raw = fs::read_to_string(&config_path)
             .with_context(|| format!("failed to read config file {}", config_path.display()))?;
         toml::from_str(&raw)
@@ -248,7 +252,7 @@ pub fn load_config(override_path: Option<PathBuf>) -> Result<LoadedConfig> {
 pub fn default_config() -> Result<Config> {
     let runtime_home = default_runtime_home()?;
     let skill_path = default_skill_path()?;
-    let github_repo = Some(infer_github_repo().unwrap_or_else(default_github_repo));
+    let github_repo = Some(default_github_repo());
 
     Ok(Config {
         runtime: RuntimeConfig { home: runtime_home },
@@ -448,9 +452,15 @@ impl Default for BurninOutlineConfig {
     }
 }
 
+pub fn default_translate_reasoning_effort() -> String {
+    "medium".to_string()
+}
+
 impl Default for TranslateConfig {
     fn default() -> Self {
         Self {
+            command: default_transcribe_cleanup_command(),
+            reasoning_effort: default_translate_reasoning_effort(),
             model: default_translate_model(),
             append: default_translate_append(),
             default_targets: Vec::new(),
@@ -485,7 +495,7 @@ pub fn expand_home(path: &Path) -> Result<PathBuf> {
 
 fn migrate_managed_defaults(config: &mut Config) -> bool {
     let mut changed = false;
-    if config.translate.model == LEGACY_TRANSLATE_MODEL {
+    if config.translate.model.starts_with("gemini-") {
         config.translate.model = default_translate_model();
         changed = true;
     }
@@ -531,6 +541,7 @@ fn resolve_config_paths(config: &mut Config) -> Result<()> {
         );
     }
     validate_transcribe_config(&config.transcribe)?;
+    crate::translate::validate_config(&config.translate)?;
     Ok(())
 }
 
@@ -623,8 +634,20 @@ mod tests {
 
     use super::{
         Config, default_config, default_config_path, default_runtime_home, expand_home,
-        migrate_managed_defaults, resolve_config_paths, validate_transcribe_config,
+        load_config, migrate_managed_defaults, resolve_config_paths, validate_transcribe_config,
     };
+
+    #[test]
+    fn explicit_missing_config_never_falls_back_to_defaults() {
+        let directory =
+            crate::runtime::ScopedTempPath::directory(&std::env::temp_dir(), "missing-config-test")
+                .unwrap();
+        let path = directory.path().join("missing.toml");
+        let error = load_config(Some(path.clone())).unwrap_err();
+        assert!(error.to_string().contains("failed to read config file"));
+        assert!(error.to_string().contains(path.to_str().unwrap()));
+        assert!(!path.exists());
+    }
 
     #[test]
     fn expands_tilde_paths() {
@@ -671,7 +694,9 @@ mod tests {
         assert_eq!(config.burnin.outline.colour, "black");
         assert_eq!(config.burnin.outline.width, 2);
         assert!(config.burnin.styles.is_empty());
-        assert_eq!(config.translate.model, "gemini-3.1-flash-lite");
+        assert_eq!(config.translate.model, "gpt-5.6-luna");
+        assert_eq!(config.translate.reasoning_effort, "medium");
+        assert_eq!(config.translate.command, "codex");
         assert!(config.translate.append);
         assert!(config.translate.default_targets.is_empty());
         assert!(config.translate.line_order.is_empty());
@@ -762,7 +787,9 @@ id = "base"
         config.release.github_repo = None;
 
         assert!(migrate_managed_defaults(&mut config));
-        assert_eq!(config.translate.model, "gemini-3.1-flash-lite");
+        assert_eq!(config.translate.model, "gpt-5.6-luna");
+        assert_eq!(config.translate.reasoning_effort, "medium");
+        assert_eq!(config.translate.command, "codex");
         assert_eq!(
             config.release.github_repo.as_deref(),
             Some("zhuisDEV/lilaccaps")

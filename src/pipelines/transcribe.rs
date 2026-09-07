@@ -22,7 +22,7 @@ use crate::runtime::{
 use crate::segmentation::{SpeechWindowOptions, fixed_windows, speech_windows};
 use crate::subtitles::{
     CuePolicy, SubtitleCue, TimedWord, build_cues_from_timed_words, optimize_cues, validate_cues,
-    write_srt_file,
+    write_transcript_srt_file,
 };
 
 static WHISPER_LOGGING_HOOKS: Once = Once::new();
@@ -251,7 +251,7 @@ pub fn run(
     for warning in &qa_warnings {
         eprintln!("transcribe_qa_warning = {warning}");
     }
-    write_srt_file(&output, &cues)?;
+    write_transcript_srt_file(&output, &cues)?;
 
     Ok(TranscribeOutput {
         input,
@@ -347,19 +347,7 @@ fn transcribe_with_faster_whisper(
         cue_policy(config),
         milliseconds_to_centiseconds(config.cues.pause_split_ms),
     );
-    let words_match = transcript_text_key(
-        &output
-            .words
-            .iter()
-            .map(|word| word.text.as_str())
-            .collect::<String>(),
-    ) == transcript_text_key(
-        &output
-            .segments
-            .iter()
-            .map(|cue| cue.text.as_str())
-            .collect::<String>(),
-    );
+    let words_match = timed_words_match_segments(&output.words, &output.segments);
     let (raw_cues, cue_timing) = if !timed_cues.is_empty() && words_match {
         (timed_cues, "word")
     } else {
@@ -647,7 +635,13 @@ fn transcribe_attempt(
             word_timed_windows += 1;
         }
         current_cues.retain_mut(|cue| constrain_cue_to_chunk(cue, index, &chunks, sample_rate));
-        append_boundary_cues(&mut cues_with_sources, current_cues, index);
+        append_boundary_cues(
+            &mut cues_with_sources,
+            current_cues,
+            index,
+            &chunks,
+            sample_rate,
+        );
     }
 
     let media_duration_cs = samples_to_centiseconds(audio.len(), sample_rate);
@@ -854,11 +848,20 @@ fn append_boundary_cues(
     target: &mut Vec<(usize, SubtitleCue)>,
     source: Vec<SubtitleCue>,
     chunk_index: usize,
+    chunks: &[Range<usize>],
+    sample_rate: usize,
 ) {
     for cue in source {
         let cue_key = boundary_text_key(&cue.text);
         if let Some((previous_chunk, previous)) = target.last_mut()
             && *previous_chunk != chunk_index
+            && cues_share_source_audio(
+                previous,
+                &cue,
+                &chunks[*previous_chunk],
+                &chunks[chunk_index],
+                sample_rate,
+            )
             && !cue_key.is_empty()
             && boundary_texts_match(&boundary_text_key(&previous.text), &cue_key)
             && cue.start_cs <= previous.end_cs.saturating_add(25)
@@ -868,10 +871,27 @@ fn append_boundary_cues(
             if cue.text.chars().count() > previous.text.chars().count() {
                 previous.text = cue.text;
             }
+            *previous_chunk = chunk_index;
             continue;
         }
         target.push((chunk_index, cue));
     }
+}
+
+fn cues_share_source_audio(
+    previous: &SubtitleCue,
+    current: &SubtitleCue,
+    previous_chunk: &Range<usize>,
+    current_chunk: &Range<usize>,
+    sample_rate: usize,
+) -> bool {
+    let start = samples_to_centiseconds(previous_chunk.start.max(current_chunk.start), sample_rate);
+    let end = samples_to_centiseconds(previous_chunk.end.min(current_chunk.end), sample_rate);
+    end > start
+        && previous.start_cs < end
+        && previous.end_cs > start
+        && current.start_cs < end
+        && current.end_cs > start
 }
 
 fn boundary_texts_match(previous: &str, current: &str) -> bool {
@@ -954,17 +974,7 @@ fn collect_cues(
 
     let timed_cues =
         build_cues_from_timed_words(&timed_words, cue_options.policy, cue_options.pause_split_cs);
-    let word_text_matches = transcript_text_key(
-        &timed_words
-            .iter()
-            .map(|word| word.text.as_str())
-            .collect::<String>(),
-    ) == transcript_text_key(
-        &segment_cues
-            .iter()
-            .map(|cue| cue.text.as_str())
-            .collect::<String>(),
-    );
+    let word_text_matches = timed_words_match_segments(&timed_words, &segment_cues);
     let non_empty_segments = segment_cues.len();
     let (cues, cue_timing) = if !timed_cues.is_empty() && word_text_matches {
         (timed_cues, "word")
@@ -1049,6 +1059,26 @@ fn collect_segment_timed_words(
     }
 
     Ok(())
+}
+
+fn timed_words_match_segments(words: &[TimedWord], segments: &[SubtitleCue]) -> bool {
+    let word_text = transcript_text_key(
+        &words
+            .iter()
+            .map(|word| word.text.as_str())
+            .collect::<String>(),
+    );
+    let mut remaining = word_text.as_str();
+    for segment in segments {
+        let segment_text = transcript_text_key(&segment.text);
+        let Some(rest) = remaining.strip_prefix(&segment_text) else {
+            return false;
+        };
+        // Segment text is trimmed by both engines. Only boundary whitespace may
+        // differ; keep checking internal word spacing and all recognised content.
+        remaining = rest.trim_start();
+    }
+    remaining.is_empty()
 }
 
 fn transcript_text_key(text: &str) -> String {
@@ -1138,11 +1168,12 @@ mod tests {
         AttemptDiagnostics, AttemptPlan, DecodeStrategy, append_boundary_cues,
         apply_transcribe_overrides, build_attempts, clamp_segment_to_chunk, clamp_token_to_chunk,
         constrain_cue_to_chunk, cue_belongs_to_chunk, detected_language_attempts, detection_audio,
-        resolve_language, samples_to_centiseconds, transcript_text_key, transcription_windows,
+        resolve_language, samples_to_centiseconds, timed_words_match_segments, transcript_text_key,
+        transcription_windows,
     };
     use crate::config::{TranscribeEngine, TranscribeSegmentationMode, default_config};
     use crate::segmentation::fixed_windows;
-    use crate::subtitles::SubtitleCue;
+    use crate::subtitles::{SubtitleCue, TimedWord};
 
     #[test]
     fn cli_language_overrides_config_language() {
@@ -1381,6 +1412,8 @@ mod tests {
                 text: "hello!".to_string(),
             }],
             1,
+            &fixed_windows(60, 1, 30, 2),
+            1,
         );
 
         assert_eq!(cues.len(), 1);
@@ -1408,6 +1441,8 @@ mod tests {
                 text: "才真正适合日常使用".to_string(),
             }],
             4,
+            &fixed_windows(150, 1, 30, 2),
+            1,
         );
 
         assert_eq!(cues.len(), 1);
@@ -1419,6 +1454,92 @@ mod tests {
     fn samples_convert_to_centiseconds() {
         assert_eq!(samples_to_centiseconds(16_000, 16_000), 100);
         assert_eq!(samples_to_centiseconds(24_000, 16_000), 150);
+    }
+
+    #[test]
+    fn repeated_speech_from_disjoint_windows_is_preserved() {
+        for chunks in [vec![0..30, 30..60], vec![0..30, 28..58]] {
+            let mut cues = vec![(
+                0,
+                SubtitleCue {
+                    index: 1,
+                    start_cs: 2_950,
+                    end_cs: 3_000,
+                    text: "Yes.".to_string(),
+                },
+            )];
+            let current = SubtitleCue {
+                index: 2,
+                start_cs: 3_000,
+                end_cs: 3_050,
+                text: "Yes.".to_string(),
+            };
+            append_boundary_cues(&mut cues, vec![current], 1, &chunks, 1);
+            assert_eq!(cues.len(), 2);
+            assert_eq!(cues[0].1.end_cs, 3_000);
+            assert_eq!(cues[1].1.start_cs, 3_000);
+        }
+    }
+
+    #[test]
+    fn a_boundary_merge_does_not_consume_the_next_utterance_in_the_same_window() {
+        let cue = |start_cs, end_cs| SubtitleCue {
+            index: 1,
+            start_cs,
+            end_cs,
+            text: "Yes.".to_string(),
+        };
+        let mut cues = vec![(0, cue(2_860, 2_900))];
+        append_boundary_cues(
+            &mut cues,
+            vec![cue(2_900, 2_930), cue(2_940, 2_980)],
+            1,
+            &[0..30, 28..58],
+            1,
+        );
+        assert_eq!(cues.len(), 2);
+        assert_eq!(cues[0].1.end_cs, 2_930);
+        assert_eq!(cues[1].1.start_cs, 2_940);
+    }
+
+    #[test]
+    fn word_integrity_preserves_segment_boundaries_without_hiding_missing_text() {
+        let matches = |word_texts: &[&str], segment_texts: &[&str]| {
+            let words = word_texts
+                .iter()
+                .map(|text| TimedWord {
+                    start_cs: 0,
+                    end_cs: 1,
+                    text: (*text).to_string(),
+                })
+                .collect::<Vec<_>>();
+            let segments = segment_texts
+                .iter()
+                .enumerate()
+                .map(|(index, text)| SubtitleCue {
+                    index: index + 1,
+                    start_cs: 0,
+                    end_cs: 1,
+                    text: (*text).to_string(),
+                })
+                .collect::<Vec<_>>();
+            timed_words_match_segments(&words, &segments)
+        };
+        assert!(matches(
+            &[" Hello", " world.", " Next", " sentence."],
+            &["Hello world.", "Next sentence."]
+        ));
+        assert!(matches(&["你好", "世界"], &["你好", "世界"]));
+        assert!(matches(&[" inter", "national"], &["inter", "national"]));
+        assert!(!matches(
+            &[" Hello", " world."],
+            &["Hello world.", "Next sentence."]
+        ));
+        assert!(!matches(
+            &[" Hello", " world.", " world."],
+            &["Hello world."]
+        ));
+        assert!(!matches(&[" Hello", "world."], &["Hello world."]));
     }
 
     #[test]

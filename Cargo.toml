@@ -1,6 +1,6 @@
 [package]
 name = "lilaccaps"
-version = "0.1.21"
+version = "0.1.22"
 description = "Rust CLI for transcribing media, burning subtitles, and watermarking video"
 edition = "2024"
 license = "MIT"
@@ -22,4 +22,3 @@ serde_json = "1.0.151"
 semver = "1.0.28"
 toml = "1.1.4"
 whisper-rs = "0.16.0"
-dotenvy = "0.15.7"

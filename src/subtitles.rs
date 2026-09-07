@@ -14,6 +14,14 @@ pub struct SubtitleCue {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SrtCue {
+    pub index: usize,
+    pub start_ms: i64,
+    pub end_ms: i64,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TimedWord {
     pub start_cs: i64,
     pub end_cs: i64,
@@ -322,14 +330,17 @@ fn split_long_cue(cue: SubtitleCue, policy: CuePolicy) -> Vec<SubtitleCue> {
         } else {
             proportional_timestamp(cue.start_cs, duration_cs, cumulative_weight, total_weight)
         };
-        if end_cs > start_cs {
-            split_cues.push(SubtitleCue {
-                index: cue.index,
-                start_cs,
-                end_cs,
-                text: part,
-            });
+        if end_cs <= start_cs {
+            // Keep all text when centisecond timing cannot represent every part.
+            // Readability QA can report the unsplit cue instead of losing words.
+            return vec![cue];
         }
+        split_cues.push(SubtitleCue {
+            index: cue.index,
+            start_cs,
+            end_cs,
+            text: part,
+        });
     }
     split_cues
 }
@@ -488,27 +499,48 @@ pub fn validate_cues(cues: &[SubtitleCue], policy: CuePolicy) -> Result<Subtitle
     Ok(SubtitleQaReport { warnings })
 }
 
-pub fn write_srt_file(path: &Path, cues: &[SubtitleCue]) -> Result<()> {
+pub fn write_transcript_srt_file(path: &Path, cues: &[SubtitleCue]) -> Result<()> {
+    let cues = cues
+        .iter()
+        .map(|cue| {
+            Ok(SrtCue {
+                index: cue.index,
+                start_ms: cue
+                    .start_cs
+                    .checked_mul(10)
+                    .context("cue start timestamp is too large")?,
+                end_ms: cue
+                    .end_cs
+                    .checked_mul(10)
+                    .context("cue end timestamp is too large")?,
+                text: cue.text.clone(),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    write_srt_file(path, &cues)
+}
+
+pub fn write_srt_file(path: &Path, cues: &[SrtCue]) -> Result<()> {
     let content = render_srt(cues);
     atomic_write(path, content)
         .with_context(|| format!("failed to write subtitle file {}", path.display()))
 }
 
-pub fn parse_srt_file(path: &Path) -> Result<Vec<SubtitleCue>> {
+pub fn parse_srt_file(path: &Path) -> Result<Vec<SrtCue>> {
     let raw = fs::read_to_string(path)
         .with_context(|| format!("failed to read subtitle file {}", path.display()))?;
     parse_srt(&raw)
 }
 
-fn render_srt(cues: &[SubtitleCue]) -> String {
+fn render_srt(cues: &[SrtCue]) -> String {
     let mut output = String::new();
     for cue in cues {
         let text = normalize_cue_text(&cue.text);
         output.push_str(&format!(
             "{}\n{} --> {}\n{}\n\n",
             cue.index,
-            format_timestamp(cue.start_cs),
-            format_timestamp(cue.end_cs),
+            format_timestamp(cue.start_ms),
+            format_timestamp(cue.end_ms),
             text
         ));
     }
@@ -541,7 +573,7 @@ fn is_cjk_character(character: char) -> bool {
     )
 }
 
-fn parse_srt(raw: &str) -> Result<Vec<SubtitleCue>> {
+fn parse_srt(raw: &str) -> Result<Vec<SrtCue>> {
     let mut cues = Vec::new();
     let normalized = raw
         .trim_start_matches('\u{feff}')
@@ -568,16 +600,16 @@ fn parse_srt(raw: &str) -> Result<Vec<SubtitleCue>> {
             bail!("cue {index} is empty");
         }
 
-        let start_cs = parse_timestamp(start)?;
-        let end_cs = parse_timestamp(end)?;
-        if end_cs < start_cs {
+        let start_ms = parse_timestamp(start)?;
+        let end_ms = parse_timestamp(end)?;
+        if end_ms < start_ms {
             bail!("cue {index} ends before it starts");
         }
 
-        cues.push(SubtitleCue {
+        cues.push(SrtCue {
             index,
-            start_cs,
-            end_cs,
+            start_ms,
+            end_ms,
             text,
         });
     }
@@ -606,8 +638,7 @@ fn srt_blocks(normalized: &str) -> Vec<String> {
     blocks
 }
 
-fn format_timestamp(centiseconds: i64) -> String {
-    let total_millis = centiseconds * 10;
+fn format_timestamp(total_millis: i64) -> String {
     let hours = total_millis / 3_600_000;
     let minutes = (total_millis % 3_600_000) / 60_000;
     let seconds = (total_millis % 60_000) / 1_000;
@@ -653,13 +684,13 @@ fn parse_timestamp(input: &str) -> Result<i64> {
         .and_then(|value| value.checked_add(seconds * 1_000))
         .and_then(|value| value.checked_add(millis))
         .ok_or_else(|| anyhow::anyhow!("subtitle timestamp is too large: {input}"))?;
-    Ok(total_millis / 10)
+    Ok(total_millis)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        CuePolicy, SubtitleCue, TimedWord, build_cues_from_timed_words, format_timestamp,
+        CuePolicy, SrtCue, SubtitleCue, TimedWord, build_cues_from_timed_words, format_timestamp,
         optimize_cues, parse_srt, parse_timestamp, render_srt, validate_cues,
     };
 
@@ -676,15 +707,15 @@ mod tests {
 
     #[test]
     fn formats_srt_timestamp() {
-        assert_eq!(format_timestamp(123), "00:00:01,230");
+        assert_eq!(format_timestamp(1239), "00:00:01,239");
     }
 
     #[test]
     fn renders_srt_content() {
-        let content = render_srt(&[SubtitleCue {
+        let content = render_srt(&[SrtCue {
             index: 1,
-            start_cs: 0,
-            end_cs: 123,
+            start_ms: 0,
+            end_ms: 1230,
             text: "hello".to_string(),
         }]);
         assert!(content.contains("00:00:00,000 --> 00:00:01,230"));
@@ -693,10 +724,10 @@ mod tests {
 
     #[test]
     fn rendering_removes_blank_lines_inside_cues() {
-        let content = render_srt(&[SubtitleCue {
+        let content = render_srt(&[SrtCue {
             index: 1,
-            start_cs: 0,
-            end_cs: 100,
+            start_ms: 0,
+            end_ms: 1000,
             text: " first line \n\n  \n second line ".to_string(),
         }]);
         assert!(content.contains("first line\nsecond line\n\n"));
@@ -709,7 +740,18 @@ mod tests {
             parse_srt("1\n00:00:00,000 --> 00:00:01,230\nhello\n").expect("srt should parse");
         assert_eq!(cues.len(), 1);
         assert_eq!(cues[0].text, "hello");
-        assert_eq!(cues[0].end_cs, 123);
+        assert_eq!(cues[0].end_ms, 1230);
+    }
+
+    #[test]
+    fn rewriting_srt_text_preserves_millisecond_timing_and_indexes() {
+        let source = "7\n00:00:01,231 --> 00:00:01,239\nsource\n\n8\n00:00:01,241 --> 00:00:02,987\nsource\n\n";
+        let mut cues = parse_srt(source).expect("SRT should parse");
+        for cue in &mut cues {
+            cue.text = "translated".to_string();
+        }
+
+        assert_eq!(render_srt(&cues), source.replace("source", "translated"));
     }
 
     #[test]
@@ -720,7 +762,7 @@ mod tests {
         .expect("common SRT variants should parse");
         assert_eq!(cues.len(), 2);
         assert_eq!(cues[0].text, "hello");
-        assert_eq!(cues[1].start_cs, 123);
+        assert_eq!(cues[1].start_ms, 1230);
     }
 
     #[test]
@@ -744,7 +786,7 @@ mod tests {
     fn parses_timestamp() {
         assert_eq!(
             parse_timestamp("00:00:01,230").expect("timestamp should parse"),
-            123
+            1230
         );
     }
 
@@ -998,6 +1040,37 @@ mod tests {
                 .iter()
                 .any(|warning| warning.contains("above"))
         );
+    }
+
+    #[test]
+    fn optimizer_preserves_all_text_when_timing_is_too_short_to_split() {
+        let text =
+            "一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十";
+        for media_duration_cs in [1, 1000] {
+            let optimized = optimize_cues(
+                vec![SubtitleCue {
+                    index: 1,
+                    start_cs: 0,
+                    end_cs: 1,
+                    text: text.to_string(),
+                }],
+                media_duration_cs,
+                cue_policy(),
+            );
+
+            assert_eq!(optimized.len(), 1);
+            assert_eq!(optimized[0].text, text);
+            assert_eq!(optimized[0].start_cs, 0);
+            assert_eq!(optimized[0].end_cs, media_duration_cs.min(80));
+            let report = validate_cues(&optimized, cue_policy())
+                .expect("the complete short cue should remain structurally valid");
+            assert!(
+                report
+                    .warnings
+                    .iter()
+                    .any(|warning| warning.contains("character"))
+            );
+        }
     }
 
     #[test]

@@ -23,7 +23,6 @@ Do not hide transcription, translation, and burn-in inside one command unless th
 - Runtime home: `~/.lilac/lilaccaps`
 - Models: `~/.lilac/lilaccaps/models`
 - Temp files: `~/.lilac/lilaccaps/tmp`
-- Optional env file: `~/.lilac/lilaccaps/.env`
 
 `lilaccaps.toml` should keep `agent.skill_path` pointed at the OpenClaw skill path.
 
@@ -95,6 +94,11 @@ lilaccaps translate ./input.srt --to en --append
 lilaccaps translate ./input.srt --to zh-hans --to en --append
 ```
 
+Translation uses `gpt-5.6-luna` with `medium` reasoning through a recent Codex CLI supporting
+`--ignore-user-config` (verified with 0.153.4). It reuses your Codex app ChatGPT OAuth login;
+check it with `codex login status`. Keep the same `CODEX_HOME` as the app. Gemini translation
+is retired and no translation API key is needed.
+
 Burn subtitles into a video:
 
 ```bash
@@ -165,7 +169,9 @@ command = "codex"
 model = "gpt-5.6-terra"
 
 [translate]
-model = "gemini-3.1-flash-lite"
+command = "codex"
+model = "gpt-5.6-luna"
+reasoning_effort = "medium"
 append = true
 default_targets = ["zh-hans", "en"]
 line_order = ["source", "zh-hans", "en"]
@@ -182,6 +188,10 @@ enabled = true
 colour = "black"
 width = 2
 ```
+
+`translate.model` also accepts `openai/gpt-5.6-luna`. `translate.reasoning_effort` accepts
+`low`, `medium`, `high`, `xhigh`, or `max`; it is passed explicitly to Codex. Existing `gemini-*`
+model settings migrate to Luna on load, and install or update persists the migration.
 
 Transcription builds cues from Whisper token timestamps by default, preferring punctuation and
 pauses and applying CJK-aware character limits. `cue_timing` reports `word`, `mixed`, or

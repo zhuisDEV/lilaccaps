@@ -230,19 +230,66 @@ pub fn atomic_write(path: &Path, contents: impl AsRef<[u8]>) -> Result<()> {
 }
 
 pub fn cargo_bin_dir() -> Result<PathBuf> {
-    if let Ok(cargo_home) = env::var("CARGO_HOME") {
-        return Ok(PathBuf::from(cargo_home).join("bin"));
-    }
-
-    let home = dirs::home_dir().context("failed to detect home directory")?;
-    Ok(home.join(".cargo").join("bin"))
+    Ok(cargo_install_root()?.join("bin"))
 }
 
 pub fn cargo_install_root() -> Result<PathBuf> {
-    cargo_bin_dir()?
+    let override_root = env::var_os("LILACCAPS_INSTALL_ROOT")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    let cargo_home = env::var_os("CARGO_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    let executable = current_executable()?
+        .canonicalize()
+        .context("failed to resolve the installed executable")?;
+    resolve_install_root(
+        override_root.as_deref(),
+        &executable,
+        cargo_home.as_deref(),
+        dirs::home_dir().as_deref(),
+    )
+}
+
+fn resolve_install_root(
+    override_root: Option<&Path>,
+    executable: &Path,
+    cargo_home: Option<&Path>,
+    home: Option<&Path>,
+) -> Result<PathBuf> {
+    // An installed executable remembers its Cargo root even when the installer's
+    // environment is no longer present. Development binaries use the Cargo default.
+    let executable_root = executable
         .parent()
+        .filter(|parent| parent.file_name().is_some_and(|name| name == "bin"))
+        .and_then(Path::parent);
+    let root = override_root
+        .or(executable_root)
+        .or(cargo_home)
         .map(Path::to_path_buf)
-        .context("failed to resolve Cargo install root")
+        .or_else(|| home.map(|home| home.join(".cargo")))
+        .context("failed to resolve Cargo install root")?;
+    let mut depth = 0usize;
+    for component in root.components() {
+        match component {
+            std::path::Component::Normal(_) => depth += 1,
+            std::path::Component::ParentDir => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    let resolves_to_root = root.exists()
+        && root
+            .canonicalize()
+            .with_context(|| format!("failed to resolve Cargo install root {}", root.display()))?
+            .parent()
+            .is_none();
+    if !root.is_absolute() || depth == 0 || resolves_to_root {
+        bail!(
+            "Cargo install root must be an absolute directory below the filesystem root: {}",
+            root.display()
+        );
+    }
+    Ok(root)
 }
 
 pub fn install_binary_path() -> Result<PathBuf> {
@@ -833,8 +880,8 @@ fn directory_has_entries(path: &Path) -> bool {
 mod tests {
     use super::{
         CommandDependency, DoctorReport, ScopedTempPath, ensure_dependency, ensure_runtime_marker,
-        first_output_line, fix_dependencies_with_brew, paths_refer_to_same_file, unique_temp_path,
-        validate_runtime_home_for_removal,
+        first_output_line, fix_dependencies_with_brew, paths_refer_to_same_file,
+        resolve_install_root, unique_temp_path, validate_runtime_home_for_removal,
     };
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -849,6 +896,46 @@ mod tests {
             "lilaccaps-runtime-{name}-{}-{unique}",
             std::process::id()
         ))
+    }
+
+    #[test]
+    fn lifecycle_keeps_the_active_custom_installation_root() {
+        let root = resolve_install_root(
+            None,
+            Path::new("/custom/cargo/bin/lilaccaps"),
+            Some(Path::new("/ordinary/cargo")),
+            Some(Path::new("/user")),
+        )
+        .unwrap();
+        assert_eq!(root, Path::new("/custom/cargo"));
+        assert_eq!(
+            resolve_install_root(
+                Some(Path::new("/explicit/root")),
+                Path::new("/custom/cargo/bin/lilaccaps"),
+                None,
+                None,
+            )
+            .unwrap(),
+            Path::new("/explicit/root")
+        );
+    }
+
+    #[test]
+    fn development_binaries_use_cargo_home_or_the_default() {
+        let executable = Path::new("/repo/target/debug/lilaccaps");
+        assert_eq!(
+            resolve_install_root(None, executable, Some(Path::new("/cargo")), None).unwrap(),
+            Path::new("/cargo")
+        );
+        assert_eq!(
+            resolve_install_root(None, executable, None, Some(Path::new("/user"))).unwrap(),
+            Path::new("/user/.cargo")
+        );
+        for invalid in ["relative", "/", "/tmp/.."] {
+            assert!(
+                resolve_install_root(Some(Path::new(invalid)), executable, None, None).is_err()
+            );
+        }
     }
 
     #[test]

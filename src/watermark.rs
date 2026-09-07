@@ -5,7 +5,7 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use clap::ValueEnum;
 
-use crate::media::{ensure_ffmpeg_available, ffmpeg_supports_filter};
+use crate::media::{ensure_ffmpeg_available, escape_filter_option, ffmpeg_supports_filter};
 use crate::runtime::{MAGICK_DEPENDENCY, ScopedTempPath, ensure_dependency, parent_dir};
 
 const ARIAL_FONT_CANDIDATES: [&str; 3] = [
@@ -282,9 +282,9 @@ pub fn text_filter(text: &str, style: &WatermarkStyle) -> String {
         "" => "white",
         colour => colour,
     };
-    let colour = escape_drawtext_value(colour);
+    let colour = escape_filter_option(colour);
     let mut options = vec![
-        format!("text='{}'", escape_drawtext_text(text)),
+        format!("text={}", escape_filter_option(text)),
         "expansion=none".to_string(),
         format!("x={x}"),
         format!("y={y}"),
@@ -299,9 +299,9 @@ pub fn text_filter(text: &str, style: &WatermarkStyle) -> String {
         && !font.is_empty()
     {
         if let Some(font_path) = resolve_watermark_font(Some(font)) {
-            options.push(format!("fontfile='{}'", escape_drawtext_value(&font_path)));
+            options.push(format!("fontfile={}", escape_filter_option(&font_path)));
         } else {
-            options.push(format!("font='{}'", escape_drawtext_value(font)));
+            options.push(format!("font={}", escape_filter_option(font)));
         }
     }
 
@@ -313,7 +313,7 @@ pub fn text_filter(text: &str, style: &WatermarkStyle) -> String {
         options.push(format!("borderw={}", style.outline_width));
         options.push(format!(
             "bordercolor={}@{:.3}",
-            escape_drawtext_value(outline_colour),
+            escape_filter_option(outline_colour),
             style.opacity
         ));
     }
@@ -546,20 +546,6 @@ fn image_needs_conversion(path: &Path) -> bool {
         .is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "svg" | "svgz"))
 }
 
-fn escape_drawtext_text(value: &str) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('\'', "\\'")
-        .replace(':', "\\:")
-}
-
-fn escape_drawtext_value(value: &str) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('\'', "\\'")
-        .replace(':', "\\:")
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -594,7 +580,8 @@ mod tests {
     fn text_filter_escapes_text_and_uses_bottom_right_default_shape() {
         let filter = text_filter("lilac: it's here", &style(WatermarkPosition::BottomRight));
 
-        assert!(filter.contains("text='lilac\\: it\\'s here'"));
+        assert!(filter.contains("text=lilac\\\\:"));
+        assert!(filter.contains("it\\\\\\'s"));
         assert!(filter.contains("x=w-text_w-24"));
         assert!(filter.contains("y=h-text_h-24"));
         assert!(filter.contains("fontcolor=white@0.400"));
@@ -611,7 +598,7 @@ mod tests {
 
         assert!(filter.contains("fontsize=42"));
         assert!(filter.contains("fontcolor=#ffd54f@0.400"));
-        assert!(filter.contains("fontfile=") || filter.contains("font='PingFang SC'"));
+        assert!(filter.contains("fontfile=") || filter.contains("font=PingFang\\\\\\ SC"));
     }
 
     #[test]

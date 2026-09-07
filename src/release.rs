@@ -1,4 +1,3 @@
-use std::process::Command;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -71,21 +70,6 @@ pub fn latest_release_with_timeouts(
         tag_name: release.tag_name,
         version,
     }))
-}
-
-pub fn infer_github_repo() -> Option<String> {
-    let output = Command::new("git")
-        .arg("remote")
-        .arg("get-url")
-        .arg("origin")
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-
-    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    normalize_github_remote_url(&raw).ok()
 }
 
 pub fn normalize_github_repo(input: &str) -> Result<String> {

@@ -55,7 +55,14 @@ pub fn run(
     let source_lines = cues.iter().map(|cue| cue.text.clone()).collect::<Vec<_>>();
     let translated_per_target = targets
         .iter()
-        .map(|target| translate_lines(&loaded.paths.runtime_home, &model, target, &source_lines))
+        .map(|target| {
+            translate_lines(
+                &loaded.paths.runtime_home,
+                &loaded.config.translate,
+                target,
+                &source_lines,
+            )
+        })
         .collect::<Result<Vec<_>>>()?;
 
     for (index, cue) in cues.iter_mut().enumerate() {

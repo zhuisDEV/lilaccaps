@@ -64,20 +64,23 @@ pub fn subtitles_filter(
     outline_colour: Option<&str>,
     outline_width: Option<u32>,
 ) -> String {
-    let mut filter = format!("subtitles=filename='{}'", escape_subtitles_path(path));
+    let mut filter = format!(
+        "subtitles=filename={}",
+        escape_filter_option(&path.to_string_lossy())
+    );
     let mut style = Vec::new();
 
     if let Some(font) = font {
-        style.push(format!("FontName={}", escape_force_style_value(font)));
+        style.push(format!("FontName={font}"));
     }
 
     if let Some(size) = size {
         style.push(format!("FontSize={size}"));
     }
 
-    if outline_width.is_some_and(|width| width > 0) {
+    if let Some(width) = outline_width {
         style.push("BorderStyle=1".to_string());
-        style.push(format!("Outline={}", outline_width.unwrap_or_default()));
+        style.push(format!("Outline={width}"));
 
         if let Some(colour) = outline_colour.and_then(ass_colour) {
             style.push(format!("OutlineColour={colour}"));
@@ -85,9 +88,8 @@ pub fn subtitles_filter(
     }
 
     if !style.is_empty() {
-        filter.push_str(":force_style='");
-        filter.push_str(&style.join(","));
-        filter.push('\'');
+        filter.push_str(":force_style=");
+        filter.push_str(&escape_filter_option(&style.join(",")));
     }
 
     filter
@@ -124,6 +126,9 @@ pub fn ass_colour(value: &str) -> Option<String> {
 }
 
 fn ass_colour_from_hex(hex: &str) -> Option<String> {
+    if !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
     let (red, green, blue, alpha) = match hex.len() {
         6 => (
             u8::from_str_radix(&hex[0..2], 16).ok()?,
@@ -169,22 +174,25 @@ fn format_ass_colour(red: u8, green: u8, blue: u8, alpha: u8) -> String {
     format!("&H{alpha:02X}{blue:02X}{green:02X}{red:02X}")
 }
 
-fn escape_subtitles_path(path: &Path) -> String {
-    let normalized = path.to_string_lossy().replace('\\', "/");
-    normalized
-        .replace('\\', "\\\\")
-        .replace(':', "\\:")
-        .replace('\'', "\\'")
-        .replace(',', "\\,")
-        .replace('[', "\\[")
-        .replace(']', "\\]")
-}
+pub fn escape_filter_option(value: &str) -> String {
+    fn escape_token(value: &str, separators: &str) -> String {
+        let mut escaped = String::new();
+        for character in value.chars() {
+            if matches!(character, '\\' | '\'')
+                || character.is_whitespace()
+                || separators.contains(character)
+            {
+                escaped.push('\\');
+            }
+            escaped.push(character);
+        }
+        escaped
+    }
 
-fn escape_force_style_value(value: &str) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('\'', "\\'")
-        .replace(',', "\\,")
+    // Escape option values before embedding them in the enclosing filtergraph.
+    // Command passes argv directly, so no shell quoting layer is needed.
+    // https://ffmpeg.org/ffmpeg-filters.html#Notes-on-filtergraph-escaping
+    escape_token(&escape_token(value, ":"), "[],;")
 }
 
 pub fn ffmpeg_supports_filter(name: &str) -> Result<bool> {
@@ -255,7 +263,7 @@ mod tests {
             None,
         );
         assert!(filter.contains("force_style"));
-        assert!(filter.contains("FontName=PingFang SC"));
+        assert!(filter.contains("FontName=PingFang\\\\\\ SC"));
         assert!(filter.contains("FontSize=42"));
     }
 
@@ -271,6 +279,19 @@ mod tests {
         assert!(filter.contains("BorderStyle=1"));
         assert!(filter.contains("Outline=2"));
         assert!(filter.contains("OutlineColour=&H00000000"));
+    }
+
+    #[test]
+    fn disabled_outline_explicitly_overrides_the_renderer_default() {
+        let filter = subtitles_filter(Path::new("input.srt"), None, None, None, Some(0));
+        assert!(filter.contains("Outline=0"));
+    }
+
+    #[test]
+    fn malformed_hex_colours_are_rejected_without_slicing_unicode() {
+        for colour in ["#a€bb", "#中中", "#ffzz00", "#😀abcd"] {
+            assert_eq!(super::ass_colour(colour), None);
+        }
     }
 
     #[test]

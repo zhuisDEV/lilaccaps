@@ -17,8 +17,14 @@ does not contain private media or API keys.
 
 ## Security Boundaries
 
-- `GEMINI_API_KEY` is read from the process environment first and then the runtime `.env`. It is
-  sent in the `x-goog-api-key` header and must not be logged, committed, or placed in a URL.
+- Translation delegates authentication to the Codex CLI and reuses the existing ChatGPT OAuth
+  login from the inherited `CODEX_HOME`. Lilaccaps does not read or copy OAuth tokens, and Gemini
+  API credentials are no longer used. Translation ignores Codex user configuration and explicitly
+  selects the OpenAI provider, ChatGPT login method, and configured reasoning effort (default
+  `medium` for `gpt-5.6-luna`).
+- Translation sends subtitle text to Codex in an ephemeral session with a read-only sandbox and
+  a dedicated temporary working directory. Structured output is validated before publication;
+  cue timing and indexes are preserved. Source audio and video are not sent for translation.
 - Faster-whisper is optional. Its pinned PEP 723 helper is executed by `uv`, which downloads Python
   packages and the selected model on first use; review the pinned dependency before changing it.
 - Codex cleanup is disabled by default because it sends subtitle text to the configured Codex
@@ -54,7 +60,7 @@ Areas that deserve extra care:
 - downloaded model artifacts
 - file deletion during uninstall
 - media path handling and subtitle file parsing
-- API credential handling
-- optional transcript disclosure through Codex cleanup
+- Codex authentication reuse
+- subtitle disclosure through translation and optional Codex cleanup
 - uv-managed Python dependency and model downloads
 - release and installer supply-chain changes

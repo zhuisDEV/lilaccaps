@@ -9,7 +9,7 @@ use crate::media::{
     ass_colour, ensure_ffmpeg_available, ffmpeg_supports_filter, subtitles_filter, video_size,
 };
 use crate::runtime::{MAGICK_DEPENDENCY, ScopedTempPath, ensure_dependency, tmp_dir};
-use crate::subtitles::{SubtitleCue, parse_srt_file};
+use crate::subtitles::{SrtCue, parse_srt_file};
 
 const CJK_FONT_CANDIDATES: [&str; 3] = [
     "/System/Library/Fonts/Hiragino Sans GB.ttc",
@@ -227,9 +227,9 @@ fn render_overlay_images(
     work_dir: &Path,
     width: u32,
     height: u32,
-    cues: &[SubtitleCue],
+    cues: &[SrtCue],
     style: &BurninStyle,
-) -> Result<Vec<(SubtitleCue, PathBuf)>> {
+) -> Result<Vec<(SrtCue, PathBuf)>> {
     let mut overlays = Vec::with_capacity(cues.len());
 
     for (sequence, cue) in cues.iter().enumerate() {
@@ -255,7 +255,7 @@ fn render_overlay_image(
     work_dir: &Path,
     width: u32,
     height: u32,
-    cue: &SubtitleCue,
+    cue: &SrtCue,
     style: &BurninStyle,
     image_target: &str,
 ) -> Result<std::process::ExitStatus> {
@@ -479,7 +479,7 @@ fn caption_text_source(
 
 fn burn_in_with_overlay_images(
     video: &Path,
-    overlays: &[(SubtitleCue, PathBuf)],
+    overlays: &[(SrtCue, PathBuf)],
     output: &Path,
 ) -> Result<()> {
     if overlays.is_empty() {
@@ -505,15 +505,15 @@ fn burn_in_with_overlay_images(
     for (index, (cue, _)) in overlays.iter().enumerate() {
         let input = format!("{}:v", index + 1);
         let next = format!("v{}", index + 1);
-        let start = cue.start_cs as f64 / 100.0;
-        let end = cue.end_cs as f64 / 100.0;
+        let start = cue.start_ms as f64 / 1000.0;
+        let end = cue.end_ms as f64 / 1000.0;
 
         if !filter_graph.is_empty() {
             filter_graph.push(';');
         }
 
         filter_graph.push_str(&format!(
-            "[{input}]format=rgba[ov{index}];[{previous}][ov{index}]overlay=0:0:enable='between(t,{start:.2},{end:.2})'[{next}]"
+            "[{input}]format=rgba[ov{index}];[{previous}][ov{index}]overlay=0:0:enable='between(t,{start:.3},{end:.3})'[{next}]"
         ));
 
         previous = next;

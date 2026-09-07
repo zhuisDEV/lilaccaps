@@ -156,9 +156,9 @@ if [ ! -x "$installed_binary" ]; then
 fi
 
 if [ "$fix" = "1" ]; then
-  CARGO_HOME="$install_root" "$installed_binary" install --fix
+  LILACCAPS_INSTALL_ROOT="$install_root" "$installed_binary" install --fix
 else
-  CARGO_HOME="$install_root" "$installed_binary" install
+  LILACCAPS_INSTALL_ROOT="$install_root" "$installed_binary" install
 fi
 
 printf 'lilaccaps is installed globally at %s.\n' "$installed_binary"

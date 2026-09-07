@@ -27,7 +27,7 @@ The command model stays explicit:
 
 | Transcribe | Translate | Burn-in | Watermark | Lifecycle |
 | --- | --- | --- | --- | --- |
-| Extract audio with `ffmpeg`, transcribe with `whisper-rs` or faster-whisper, write `.srt` | Append multilingual lines to existing cues via Gemini | Render an existing subtitle file into video | Apply text or image watermarks with ffmpeg plus ImageMagick fallback | Install, status, update, and uninstall support |
+| Extract audio with `ffmpeg`, transcribe with `whisper-rs` or faster-whisper, write `.srt` | Append multilingual lines to existing cues via GPT-5.6-Luna through Codex | Render an existing subtitle file into video | Apply text or image watermarks with ffmpeg plus ImageMagick fallback | Install, status, update, and uninstall support |
 | Local-first subtitle timing, VAD, QA, and optional text-only Codex cleanup | Cue timing and indexes stay unchanged | Primary renderer uses `ffmpeg` subtitle filters when available | Position, opacity, size, and margin are explicit | Configured with `lilaccaps.toml` and `LILACCAPS_HOME` |
 | Output path is explicit | Translation output is explicit | Fallback renderer uses ImageMagick overlays when needed | Output path is explicit | OpenClaw skill bootstrap is supported |
 
@@ -46,7 +46,7 @@ The command model stays explicit:
 - Repo-root `SKILL.md` quick start plus this README as the full manual
 - Generated OpenClaw skill bootstrap
 - Clean primary and fallback separation for rendering
-- `.env` support for translation API credentials
+- Subtitle translation through Codex using your existing ChatGPT OAuth login
 
 ## Quick Start and Manual
 
@@ -60,6 +60,8 @@ The command model stays explicit:
 - `ffprobe`
 - `cmake`
 - ImageMagick `magick`
+- a recent authenticated `codex` CLI supporting `--ignore-user-config` for translation
+  (reuses your Codex app ChatGPT login; verified with Codex CLI 0.153.4)
 
 Optional transcription tools:
 
@@ -102,7 +104,9 @@ curl -fsSL https://raw.githubusercontent.com/zhuisDEV/lilaccaps/main/install.sh 
 ```
 
 Set `LILACCAPS_INSTALL_ROOT` to an absolute path to use a Cargo install root other than
-`CARGO_HOME` or `~/.cargo`.
+`CARGO_HOME` or `~/.cargo`. Lifecycle commands honour this override too. Without it, an
+installed binary uses the root containing its `bin` directory, so later updates and uninstalls
+keep targeting that installation. Development builds fall back to `CARGO_HOME` or `~/.cargo`.
 
 If you prefer not to pipe a remote script into `sh`, run the same primary install directly:
 
@@ -194,16 +198,18 @@ This initializes:
 - model assets/cache for the configured transcription engine under the runtime home
 - OpenClaw skill bootstrap files
 
-For translation, create a local `.env` file under the runtime home, for example
-`~/.lilac/lilaccaps/.env`, and set:
+For translation, use the Codex CLI with your existing Codex app ChatGPT login. Check that the
+CLI can access that login:
 
 ```bash
-GEMINI_API_KEY=your_google_auth_key_here
+codex login status
 ```
 
-An exported `GEMINI_API_KEY` takes precedence over `.env`; local files never override an explicit
-process environment value. The key is sent in the `x-goog-api-key` request header rather than in
-the request URL. Use a current [Gemini API key](https://ai.google.dev/gemini-api/docs/api-key).
+If it is not logged in, run `codex login` and select ChatGPT login. Keep the same Codex home as
+the app so the CLI reuses its cached authentication. Lilaccaps delegates authentication to Codex;
+there is no translation API key or `.env` credential setup.
+Translation ignores Codex user configuration while retaining authentication from the inherited
+`CODEX_HOME`. It explicitly selects the OpenAI provider and ChatGPT login method.
 
 ## Usage
 
@@ -309,7 +315,9 @@ Important values:
 - `transcribe.cleanup.enabled`
 - `transcribe.cleanup.command`
 - `transcribe.cleanup.model`
+- `translate.command`
 - `translate.model`
+- `translate.reasoning_effort`
 - `translate.append`
 - `translate.default_targets`
 - `translate.line_order`
@@ -323,6 +331,9 @@ Important values:
 - `burnin.outline.width`
 
 `LILACCAPS_HOME` overrides the runtime home at runtime.
+An explicit `--config-path` must exist for commands that read configuration; `install`, `update`,
+and `transcribe` can initialise a new config. New configs use this package's release repository,
+independently of the current Git checkout; configure `release.github_repo` explicitly for a fork.
 Runtime, skill, and explicit model paths must be absolute or begin with `~`; relative managed paths
 are rejected so lifecycle commands cannot change meaning with the current working directory.
 
@@ -461,10 +472,19 @@ for fully local work or when the recognition text must not leave the machine. Th
 QA pass always runs, regardless of cleanup. `transcribe.cleanup.command` may be an executable name
 on `PATH` or an absolute path to a specific Codex binary; relative command paths are rejected.
 
-`translate.model` defaults to `"gemini-3.1-flash-lite"`. The retired
-`"gemini-3.1-flash-lite-preview"` managed default is migrated automatically during install or
-update. `translate.append`
-defaults to `true`, which means translated lines are appended below the original cue text.
+### Translation through Codex
+
+`translate.command` defaults to `"codex"`, and `translate.model` defaults to `"gpt-5.6-luna"`.
+The routing-prefixed form `"openai/gpt-5.6-luna"` is also accepted. `translate.reasoning_effort`
+defaults to `"medium"` and accepts `"low"`, `"medium"`, `"high"`, `"xhigh"`, or `"max"`.
+Lilaccaps passes the effort explicitly so translation does not inherit a different global Codex
+reasoning setting. `translate.command` may be an executable name on `PATH` or an absolute path
+to a Codex binary.
+
+Gemini translation is retired. Existing `gemini-*` translation model settings are automatically
+mapped to `"gpt-5.6-luna"` when configuration loads; install and update persist that migration.
+
+`translate.append` defaults to `true`, which means translated lines are appended below the original cue text.
 `translate.default_targets` can provide default `--to` languages for `lilaccaps translate`.
 `translate.line_order` controls top-to-bottom line order inside each multilingual cue.
 
@@ -472,15 +492,16 @@ Example:
 
 ```toml
 [translate]
-model = "gemini-3.1-flash-lite"
+command = "codex"
+model = "gpt-5.6-luna"
+reasoning_effort = "medium"
 append = true
 default_targets = ["en", "ja"]
 line_order = ["source", "ja", "en"]
 ```
 
-`lilaccaps translate` loads `GEMINI_API_KEY` from the environment first, then from
-`$LILACCAPS_HOME/.env` (default `~/.lilac/lilaccaps/.env`). It keeps cue timing and
-indexes unchanged and only rewrites cue text.
+`lilaccaps translate` uses your existing Codex authentication and sends subtitle text to the
+configured model. It keeps cue timing and indexes unchanged and only rewrites cue text.
 
 ## Uninstall
 

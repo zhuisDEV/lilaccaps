@@ -1,5 +1,6 @@
 use std::env;
 use std::fs;
+use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
@@ -9,9 +10,9 @@ use crate::faster_whisper;
 use crate::integration::{ensure_skill_file, write_bootstrap_markdown};
 use crate::model::ensure_model_downloaded;
 use crate::runtime::{
-    cargo_bin_dir, collect_doctor_report_for_config, current_executable, ensure_cleanup_command,
-    ensure_dir, ensure_runtime_marker, fix_dependencies_with_brew, install_binary_path, models_dir,
-    tmp_dir,
+    ScopedTempPath, cargo_bin_dir, collect_doctor_report_for_config, current_executable,
+    ensure_cleanup_command, ensure_dir, ensure_runtime_marker, fix_dependencies_with_brew,
+    install_binary_path, models_dir, parent_dir, paths_refer_to_same_file, tmp_dir,
 };
 
 pub fn run(args: InstallArgs) -> Result<()> {
@@ -87,32 +88,7 @@ fn install_binary() -> Result<std::path::PathBuf> {
     let source = current_executable()?;
     let target = install_binary_path()?;
 
-    if source == target {
-        return Ok(target);
-    }
-
-    fs::copy(&source, &target).with_context(|| {
-        format!(
-            "failed to copy lilaccaps binary from {} to {}",
-            source.display(),
-            target.display()
-        )
-    })?;
-
-    let metadata = fs::metadata(&target)
-        .with_context(|| format!("failed to inspect installed binary at {}", target.display()))?;
-    let mut permissions = metadata.permissions();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        permissions.set_mode(0o755);
-        fs::set_permissions(&target, permissions).with_context(|| {
-            format!(
-                "failed to set executable permissions on installed binary {}",
-                target.display()
-            )
-        })?;
-    }
+    copy_binary(&source, &target)?;
 
     let path = env::var_os("PATH").unwrap_or_default();
     let cargo_bin = cargo_bin_dir()?;
@@ -122,4 +98,91 @@ fn install_binary() -> Result<std::path::PathBuf> {
     }
 
     Ok(target)
+}
+
+fn copy_binary(source: &Path, target: &Path) -> Result<()> {
+    if paths_refer_to_same_file(source, target)? {
+        return Ok(());
+    }
+
+    let temporary = ScopedTempPath::file(parent_dir(target), "lilaccaps-install", None);
+    fs::copy(source, temporary.path()).with_context(|| {
+        format!(
+            "failed to copy lilaccaps binary from {} to {}",
+            source.display(),
+            target.display()
+        )
+    })?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o755)).with_context(
+            || {
+                format!(
+                    "failed to set executable permissions on installed binary {}",
+                    target.display()
+                )
+            },
+        )?;
+    }
+
+    temporary.persist(target)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::copy_binary;
+    use crate::runtime::ScopedTempPath;
+    use std::fs;
+
+    #[test]
+    fn binary_copy_preserves_aliases_and_failed_replacements() {
+        let directory =
+            ScopedTempPath::directory(&std::env::temp_dir(), "install-copy-test").unwrap();
+        let source = directory.path().join("source");
+        let target = directory.path().join("target");
+        fs::write(&source, b"working executable").unwrap();
+        fs::hard_link(&source, &target).unwrap();
+        copy_binary(&source, &target).unwrap();
+        assert_eq!(fs::read(&source).unwrap(), b"working executable");
+        assert_eq!(fs::read(&target).unwrap(), b"working executable");
+        assert!(copy_binary(&directory.path().join("missing"), &target).is_err());
+        assert_eq!(fs::read(&target).unwrap(), b"working executable");
+
+        #[cfg(unix)]
+        {
+            let alias = directory.path().join("alias");
+            std::os::unix::fs::symlink(&source, &alias).unwrap();
+            copy_binary(&source, &alias).unwrap();
+            assert!(
+                fs::symlink_metadata(&alias)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+            assert_eq!(fs::read(&source).unwrap(), b"working executable");
+        }
+    }
+
+    #[test]
+    fn binary_replacement_is_published_with_executable_permissions() {
+        let directory =
+            ScopedTempPath::directory(&std::env::temp_dir(), "install-replace-test").unwrap();
+        let source = directory.path().join("source");
+        let target = directory.path().join("target");
+        fs::write(&source, b"new executable").unwrap();
+        fs::write(&target, b"old executable").unwrap();
+        copy_binary(&source, &target).unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"new executable");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+                0o755
+            );
+        }
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 2);
+    }
 }

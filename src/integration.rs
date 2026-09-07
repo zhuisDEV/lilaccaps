@@ -59,7 +59,7 @@ pub fn write_bootstrap_markdown(paths: &ConfigPaths, config: &Config) -> Result<
 - `cmake`: build `whisper-rs` and its native `whisper.cpp` dependency\n\
 - `magick`: fallback burn-in renderer when the local `ffmpeg` build does not include the `subtitles` filter\n\
 - optional `uv`: run the pinned faster-whisper helper and manage its Python environment\n\
-- optional `codex`: run conservative text-only subtitle cleanup when explicitly enabled\n\n\
+- authenticated `codex`: translate subtitles and run optional conservative text-only cleanup; translation requires a recent CLI supporting `--ignore-user-config` (verified with 0.153.4)\n\n\
 ## Install guidance\n\
 - macOS with Homebrew: `brew install ffmpeg-full cmake imagemagick`; add `uv` for faster-whisper\n\
 - if you keep a plain `ffmpeg` build, transcription still works and burn-in falls back to ImageMagick when the `subtitles` or `ass` filters are missing\n\
@@ -75,10 +75,11 @@ pub fn write_bootstrap_markdown(paths: &ConfigPaths, config: &Config) -> Result<
 - transcription models and caches are managed under `{}/models`\n\
 - temporary working files are stored under `{}/tmp`\n\
 - config is stored in `lilaccaps.toml`\n\n\
-## API credentials\n\
-- create a local `.env` file under the runtime home or export `GEMINI_API_KEY`\n\
-- an exported `GEMINI_API_KEY` takes precedence over `$LILACCAPS_HOME/.env`\n\
-- the default translation model is `gemini-3.1-flash-lite`\n\
+## Translation authentication\n\
+- reuse the Codex app ChatGPT OAuth login; check it with `codex login status` and keep the same `CODEX_HOME`\n\
+- translation ignores Codex user configuration while retaining cached authentication; it explicitly selects OpenAI and ChatGPT login\n\
+- `translate.command` defaults to `codex`, `translate.model` to `gpt-5.6-luna`, and `translate.reasoning_effort` to `medium`\n\
+- Gemini translation is retired; no translation API key or `.env` credentials are needed\n\
 \n\
 ## OpenClaw setup\n\
 1. Confirm `LILACCAPS_HOME` if you need a non-default runtime directory.\n\
@@ -120,6 +121,8 @@ pub fn write_bootstrap_markdown(paths: &ConfigPaths, config: &Config) -> Result<
 \n\
 ## Translation behavior\n\
 - `lilaccaps translate --to en --to ja --append` appends one translated line per target language under the original cue text\n\
+- the model also accepts the `openai/` prefix; reasoning effort accepts `low`, `medium`, `high`, `xhigh`, or `max`\n\
+- existing `gemini-*` model settings map to Luna on load; install and update persist the migration\n\
 - `translate.default_targets` can define default `--to` languages in `lilaccaps.toml`\n\
 - `translate.line_order` controls top-to-bottom language order inside each multilingual cue, for example `source`, `ja`, then `en`\n\
 - cue timing and indexes stay unchanged during translation\n\
@@ -189,6 +192,10 @@ pub fn ensure_skill_file(config: &Config) -> Result<PathBuf> {
     let content = content.replace(
         "- transcription is a separate workflow.",
         "- transcription is a separate workflow.\n- `lilaccaps --version` always shows the installed version and recommends `lilaccaps update` only when a newer stable release is confirmed.",
+    );
+    let content = content.replace(
+        "- `translate` can append one or more target-language lines to each cue for multilingual subtitles.",
+        "- `translate` can append one or more target-language lines to each cue for multilingual subtitles.\n- Translation defaults to `translate.command = \"codex\"`, `translate.model = \"gpt-5.6-luna\"`, and `translate.reasoning_effort = \"medium\"`; `openai/gpt-5.6-luna` is also accepted.\n- Translation requires a recent Codex CLI supporting `--ignore-user-config` (verified with 0.153.4), reuses your Codex app ChatGPT OAuth login via the same `CODEX_HOME`, and explicitly selects OpenAI and ChatGPT login. Check authentication with `codex login status`.\n- Reasoning effort accepts `low`, `medium`, `high`, `xhigh`, or `max`. Gemini translation is retired; old `gemini-*` model settings migrate to Luna on load and are persisted by install/update. No translation API key is needed.",
     );
 
     atomic_write(skill_path, content)
