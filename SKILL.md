@@ -22,6 +22,9 @@ rendering and the necessary review has been completed.
 - Use `lilaccaps status` or `doctor` when readiness is uncertain; `--version` also checks for a newer stable release.
 - `doctor --fix` and dependency updates target macOS/Homebrew. On externally managed systems,
   use `lilaccaps update --skip-dependencies` when an update is requested.
+- Older Linux updaters through 1.0.0 can replace the binary and then report `failed to resolve the
+  installed executable`. Verify the newly installed version, then finish with `lilaccaps install`
+  using the same config path. Version 1.0.1 fixes subsequent self-updates.
 
 ## Caption project
 

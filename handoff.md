@@ -1,5 +1,24 @@
 # lilaccaps Handoff
 
+## v1.0.1: Linux Self-Update
+
+An isolated update from 0.1.23 installed the published v1.0.0 binary, then failed while locating it
+for setup refresh. On Linux, replacing the running executable invalidates its old path; the updater
+was resolving that path after Cargo had replaced it. Capture the destination before replacement so
+future updates can launch the new binary and refresh config/bootstrap/skills successfully.
+
+Local validation passed all **196 Rust tests** (176 unit and 20 integration), strict Clippy,
+formatting and the optimised release build. The new offline Linux regression replaces the running
+test executable, confirms a late path lookup reproduces the failure, and verifies the captured path
+refreshes setup with the original custom installation root and config path. The earlier v1.0.0
+installation was also recovered successfully with `lilaccaps install` in an isolated directory.
+
+The v1.0.0 tag and release are preserved. Publish v1.0.1 after its exact commit passes both CI jobs,
+then verify self-replacement in an isolated installation. Older executing updaters cannot gain this
+fix retroactively: after confirming that the new binary was installed, run `lilaccaps install` with
+the same config path to complete their setup refresh. See the
+[v1.0.1 release](https://github.com/zhuisDEV/lilaccaps/releases/tag/v1.0.1) for final evidence.
+
 ## v1.0.0 Release Scope
 
 Deliver an agent-in-the-loop caption project and reusable watermarks as **v1.0.0**. Publication was

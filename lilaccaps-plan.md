@@ -2,9 +2,10 @@
 
 ## Objective
 
-Deliver **v1.0.0** with an agent-in-the-loop flow from transcription through translation and burn-in,
-plus a reusable watermark library. Publication is authorised and gated by local checks and CI on the
-exact pushed commit.
+Deliver **v1** with an agent-in-the-loop flow from transcription through translation and burn-in,
+plus a reusable watermark library. Version 1.0.0 is published; the 1.0.1 follow-up fixes a Linux
+self-update failure found during the isolated upgrade check. Publication is authorised and gated
+by local checks and CI on the exact pushed commit.
 
 ## Scope and decisions
 

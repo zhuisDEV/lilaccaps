@@ -5,7 +5,7 @@
 [![Rust](https://img.shields.io/badge/language-Rust-orange.svg)](https://rust-lang.org/)
 
 `lilaccaps` is a Rust CLI for agent-reviewed captions and video rendering.
-**v1.0.0** adds resumable caption projects with agent review and reusable watermarks.
+**v1** adds resumable caption projects with agent review and reusable watermarks.
 Existing commands remain available for individual steps:
 
 1. transcribe local video or audio into subtitle files
@@ -198,6 +198,12 @@ The updater installs the latest stable GitHub release from its tag. Existing set
 timing defaults are retained; new translation verification settings use their defaults when omitted.
 Generated skills and manuals are refreshed. Customised skills are preserved and may need the new
 workflow instructions copied from this repository's [SKILL.md](./SKILL.md).
+
+**Upgrading an older Linux installation:** versions through 1.0.0 can install the new binary and then
+report `failed to resolve the installed executable` during setup refresh. Confirm the new version
+with `lilaccaps --version`, then run `lilaccaps install` to finish setup, keeping the same
+`--config-path` if one was supplied. Version **1.0.1** fixes this for subsequent updates by retaining
+the destination path before replacing the running executable.
 
 ### New installation
 
