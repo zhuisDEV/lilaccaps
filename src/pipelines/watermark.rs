@@ -36,18 +36,47 @@ pub fn run(
     outline_colour: String,
     outline_width: u32,
 ) -> Result<WatermarkOutput> {
+    let source = resolve_source(text, image)?;
+    let style = WatermarkStyle {
+        position,
+        opacity,
+        size,
+        margin,
+        colour,
+        font,
+        outline_colour,
+        outline_width,
+    };
+    run_with_style(video, output, source, style)
+}
+
+pub fn run_saved(
+    video: PathBuf,
+    output: Option<PathBuf>,
+    runtime_home: &Path,
+    name: &str,
+) -> Result<WatermarkOutput> {
+    let preset = crate::watermark_presets::load(runtime_home, name)?;
+    run_with_style(video, output, preset.source, preset.style)
+}
+
+pub fn run_with_style(
+    video: PathBuf,
+    output: Option<PathBuf>,
+    source: WatermarkSource,
+    style: WatermarkStyle,
+) -> Result<WatermarkOutput> {
     if !video.exists() {
         bail!("video input does not exist: {}", video.display());
     }
 
-    let source = resolve_source(text, image)?;
     if let WatermarkSource::Image(path) = &source
         && !path.exists()
     {
         bail!("watermark image does not exist: {}", path.display());
     }
 
-    let opacity = normalized_opacity(opacity)?;
+    let opacity = normalized_opacity(style.opacity)?;
     let output = output.unwrap_or_else(|| default_output_path(&video));
     if paths_refer_to_same_file(&video, &output)? {
         bail!(
@@ -70,16 +99,6 @@ pub fn run(
         )
     })?;
 
-    let style = WatermarkStyle {
-        position,
-        opacity,
-        size,
-        margin,
-        colour,
-        font,
-        outline_colour,
-        outline_width,
-    };
     let extension = output.extension().and_then(|value| value.to_str());
     let temporary = ScopedTempPath::file(parent_dir(&output), "watermark-output", extension);
     let renderer = apply_watermark(&video, temporary.path(), &source, &style)?;
@@ -89,10 +108,10 @@ pub fn run(
         video,
         output,
         watermark: source.label(),
-        position: position.label(),
+        position: style.position.label(),
         opacity,
-        size,
-        margin,
+        size: style.size,
+        margin: style.margin,
         renderer: renderer.renderer,
         renderer_reason: if renderer.reasons.is_empty() {
             "none".to_string()
@@ -103,7 +122,10 @@ pub fn run(
     })
 }
 
-fn resolve_source(text: Option<String>, image: Option<PathBuf>) -> Result<WatermarkSource> {
+pub(crate) fn resolve_source(
+    text: Option<String>,
+    image: Option<PathBuf>,
+) -> Result<WatermarkSource> {
     match (text, image) {
         (Some(text), None) => {
             let text = text.trim().to_string();

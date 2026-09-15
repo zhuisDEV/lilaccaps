@@ -4,32 +4,13 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use clap::ValueEnum;
+use serde::{Deserialize, Serialize};
 
 use crate::media::{ensure_ffmpeg_available, escape_filter_option, ffmpeg_supports_filter};
 use crate::runtime::{MAGICK_DEPENDENCY, ScopedTempPath, ensure_dependency, parent_dir};
 
-const ARIAL_FONT_CANDIDATES: [&str; 3] = [
-    "/System/Library/Fonts/Supplemental/Arial.ttf",
-    "/Library/Fonts/Arial.ttf",
-    "/Library/Fonts/Arial Unicode.ttf",
-];
-
-const VERDANA_FONT_CANDIDATES: [&str; 2] = [
-    "/System/Library/Fonts/Supplemental/Verdana.ttf",
-    "/Library/Fonts/Verdana.ttf",
-];
-
-const HELVETICA_FONT_CANDIDATES: [&str; 2] = [
-    "/System/Library/Fonts/Helvetica.ttc",
-    "/System/Library/Fonts/HelveticaNeue.ttc",
-];
-
-const PINGFANG_FONT_CANDIDATES: [&str; 2] = [
-    "/System/Library/AssetsV2/com_apple_MobileAsset_Font8/86ba2c91f017a3749571a82f2c6d890ac7ffb2fb.asset/AssetData/PingFang.ttc",
-    "/System/Library/Fonts/PingFang.ttc",
-];
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum WatermarkPosition {
     TopLeft,
     TopRight,
@@ -38,13 +19,15 @@ pub enum WatermarkPosition {
     Center,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "kebab-case")]
 pub enum WatermarkSource {
     Text(String),
     Image(PathBuf),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WatermarkStyle {
     pub position: WatermarkPosition,
     pub opacity: f32,
@@ -83,7 +66,7 @@ impl WatermarkPosition {
         }
     }
 
-    fn overlay_xy(self, margin: u32) -> (String, String) {
+    pub(crate) fn overlay_xy(self, margin: u32) -> (String, String) {
         match self {
             Self::TopLeft => (margin.to_string(), margin.to_string()),
             Self::TopRight => (format!("main_w-overlay_w-{margin}"), margin.to_string()),
@@ -116,6 +99,13 @@ pub fn apply_watermark(
     style: &WatermarkStyle,
 ) -> Result<WatermarkRendererReport> {
     ensure_ffmpeg_available()?;
+    if style.font.is_some() {
+        let sample = match source {
+            WatermarkSource::Text(text) => text,
+            WatermarkSource::Image(_) => "LILAC",
+        };
+        crate::fonts::resolve_font_path(style.font.as_deref(), sample)?;
+    }
 
     match source {
         WatermarkSource::Text(text) => apply_text_watermark(video, output, text, style),
@@ -295,12 +285,18 @@ pub fn text_filter(text: &str, style: &WatermarkStyle) -> String {
         "shadowy=2".to_string(),
     ];
 
-    if let Some(font) = style.font.as_deref().map(str::trim)
-        && !font.is_empty()
-    {
-        if let Some(font_path) = resolve_watermark_font(Some(font)) {
-            options.push(format!("fontfile={}", escape_filter_option(&font_path)));
-        } else {
+    let font = style
+        .font
+        .as_deref()
+        .map(str::trim)
+        .filter(|font| !font.is_empty());
+    if font.is_some() || text.chars().any(crate::fonts::is_cjk_or_korean_or_japanese) {
+        if let Ok(font_path) = crate::fonts::resolve_font_path(font, text) {
+            options.push(format!(
+                "fontfile={}",
+                escape_filter_option(&font_path.to_string_lossy())
+            ));
+        } else if let Some(font) = font {
             options.push(format!("font={}", escape_filter_option(font)));
         }
     }
@@ -343,7 +339,11 @@ pub fn image_filter(style: &WatermarkStyle) -> String {
     )
 }
 
-fn render_text_watermark_image(text: &str, style: &WatermarkStyle, output: &Path) -> Result<()> {
+pub(crate) fn render_text_watermark_image(
+    text: &str,
+    style: &WatermarkStyle,
+    output: &Path,
+) -> Result<()> {
     ensure_dependency(MAGICK_DEPENDENCY)?;
 
     let text_file = ScopedTempPath::file(parent_dir(output), "watermark-text", Some("txt"));
@@ -355,8 +355,14 @@ fn render_text_watermark_image(text: &str, style: &WatermarkStyle, output: &Path
     })?;
     let text_source = format!("label:@{}", text_file.path().display());
     let output_target = format!("PNG32:{}", output.display());
+    let mut resolved_style = style.clone();
+    resolved_style.font = Some(
+        crate::fonts::resolve_font_path(style.font.as_deref(), text)?
+            .to_string_lossy()
+            .into_owned(),
+    );
     let status = Command::new("magick")
-        .args(text_watermark_image_args(&text_source, style))
+        .args(text_watermark_image_args(&text_source, &resolved_style))
         .arg(output_target)
         .status()
         .with_context(|| {
@@ -373,7 +379,11 @@ fn render_text_watermark_image(text: &str, style: &WatermarkStyle, output: &Path
     Ok(())
 }
 
-fn convert_image_watermark(image: &Path, output: &Path, style: &WatermarkStyle) -> Result<()> {
+pub(crate) fn convert_image_watermark(
+    image: &Path,
+    output: &Path,
+    style: &WatermarkStyle,
+) -> Result<()> {
     ensure_dependency(MAGICK_DEPENDENCY)?;
 
     let output_target = format!("PNG32:{}", output.display());
@@ -495,52 +505,12 @@ fn append_label_layer_args(
 }
 
 pub fn resolve_watermark_font(requested: Option<&str>) -> Option<String> {
-    let requested = requested.map(str::trim).filter(|value| !value.is_empty());
-
-    if let Some(requested) = requested {
-        if Path::new(requested).exists() {
-            return Some(requested.to_string());
-        }
-
-        if let Some(path) = named_font_candidates(requested)
-            .iter()
-            .copied()
-            .find(|path| Path::new(path).exists())
-        {
-            return Some(path.to_string());
-        }
-    }
-
-    default_watermark_font().map(str::to_string)
+    crate::fonts::resolve_font_path(requested, "LILAC")
+        .ok()
+        .map(|path| path.to_string_lossy().into_owned())
 }
 
-fn default_watermark_font() -> Option<&'static str> {
-    VERDANA_FONT_CANDIDATES
-        .iter()
-        .chain(ARIAL_FONT_CANDIDATES.iter())
-        .chain(HELVETICA_FONT_CANDIDATES.iter())
-        .copied()
-        .find(|path| Path::new(path).exists())
-}
-
-fn named_font_candidates(requested: &str) -> &'static [&'static str] {
-    match normalize_font_name(requested).as_str() {
-        "arial" => &ARIAL_FONT_CANDIDATES,
-        "verdana" => &VERDANA_FONT_CANDIDATES,
-        "helvetica" | "helveticaneue" => &HELVETICA_FONT_CANDIDATES,
-        "pingfang" | "pingfangsc" => &PINGFANG_FONT_CANDIDATES,
-        _ => &[],
-    }
-}
-
-fn normalize_font_name(raw: &str) -> String {
-    raw.chars()
-        .filter(|ch| ch.is_ascii_alphanumeric())
-        .flat_map(char::to_lowercase)
-        .collect()
-}
-
-fn image_needs_conversion(path: &Path) -> bool {
+pub(crate) fn image_needs_conversion(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "svg" | "svgz"))
@@ -550,7 +520,7 @@ fn image_needs_conversion(path: &Path) -> bool {
 mod tests {
     use super::{
         WatermarkPosition, WatermarkStyle, image_filter, image_needs_conversion,
-        named_font_candidates, normalized_opacity, text_filter, text_watermark_image_args,
+        normalized_opacity, resolve_watermark_font, text_filter, text_watermark_image_args,
     };
     use std::path::Path;
 
@@ -643,10 +613,14 @@ mod tests {
     }
 
     #[test]
-    fn maps_common_font_names_to_candidates() {
-        assert!(!named_font_candidates("Arial").is_empty());
-        assert!(!named_font_candidates("Verdana").is_empty());
-        assert!(!named_font_candidates("PingFang SC").is_empty());
+    fn missing_font_files_are_not_substituted() {
+        assert!(resolve_watermark_font(Some("/nonexistent/font.ttf")).is_none());
+    }
+
+    #[test]
+    fn auto_cjk_text_resolves_a_font_file() {
+        let filter = text_filter("中文字幕", &style(WatermarkPosition::TopRight));
+        assert!(filter.contains("fontfile="));
     }
 
     #[test]

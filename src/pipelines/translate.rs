@@ -1,11 +1,14 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use serde::Serialize;
 
+use crate::caption_agent::{ReviewReport, translate_cues};
 use crate::config::load_config;
-use crate::runtime::{ensure_parent_dir, paths_refer_to_same_file};
+use crate::runtime::{
+    ScopedTempPath, atomic_write, ensure_parent_dir, parent_dir, paths_refer_to_same_file,
+};
 use crate::subtitles::{parse_srt_file, write_srt_file};
-use crate::translate::translate_lines;
 
 #[derive(Debug, Clone)]
 pub struct TranslateOutput {
@@ -14,7 +17,24 @@ pub struct TranslateOutput {
     pub targets: Vec<String>,
     pub append: bool,
     pub model: String,
+    pub verification_model: String,
+    pub review_report: PathBuf,
+    pub review_issues: usize,
     pub status: &'static str,
+}
+
+#[derive(Serialize)]
+struct TranslationReview<'a> {
+    schema_version: u32,
+    input: &'a Path,
+    output: &'a Path,
+    targets: Vec<TargetReview>,
+}
+
+#[derive(Serialize)]
+struct TargetReview {
+    language: String,
+    review: ReviewReport,
 }
 
 pub fn run(
@@ -32,6 +52,7 @@ pub fn run(
     let targets = resolve_targets(&loaded.config.translate.default_targets, targets)?;
     let append = append.unwrap_or(loaded.config.translate.append);
     let model = loaded.config.translate.model.clone();
+    let verification_model = loaded.config.translate.review_model.clone();
     let line_order = loaded.config.translate.line_order.clone();
     let output = output.unwrap_or_else(|| default_output_path(&input, append));
     if paths_refer_to_same_file(&input, &output)? {
@@ -39,6 +60,26 @@ pub fn run(
             "translation output must be different from subtitle input: {}",
             input.display()
         );
+    }
+    let review_report = output.with_file_name(format!(
+        "{}.review.json",
+        output
+            .file_name()
+            .context("translation output needs a filename")?
+            .to_string_lossy()
+    ));
+    if paths_refer_to_same_file(&input, &review_report)?
+        || paths_refer_to_same_file(&output, &review_report)?
+    {
+        bail!("translation review report must be a separate file from the input and output");
+    }
+    for destination in [&output, &review_report] {
+        if destination.exists() && !destination.is_file() {
+            bail!(
+                "translation destination is not a regular file: {}",
+                destination.display()
+            );
+        }
     }
     ensure_parent_dir(&output).with_context(|| {
         format!(
@@ -56,11 +97,12 @@ pub fn run(
     let translated_per_target = targets
         .iter()
         .map(|target| {
-            translate_lines(
+            translate_cues(
                 &loaded.paths.runtime_home,
                 &loaded.config.translate,
                 target,
-                &source_lines,
+                &cues,
+                "",
             )
         })
         .collect::<Result<Vec<_>>>()?;
@@ -71,12 +113,56 @@ pub fn run(
             labeled_lines.push(("source".to_string(), source_lines[index].clone()));
         }
         for (target_index, translated) in translated_per_target.iter().enumerate() {
-            labeled_lines.push((targets[target_index].clone(), translated[index].clone()));
+            labeled_lines.push((
+                targets[target_index].clone(),
+                translated.cues[index].text.clone(),
+            ));
         }
         cue.text = reorder_labeled_lines(&line_order, labeled_lines).join("\n");
     }
 
-    write_srt_file(&output, &cues)?;
+    let review_issues = translated_per_target
+        .iter()
+        .map(|result| result.report.issues.len())
+        .sum();
+    let report = TranslationReview {
+        schema_version: 1,
+        input: &input,
+        output: &output,
+        targets: targets
+            .iter()
+            .cloned()
+            .zip(translated_per_target)
+            .map(|(language, result)| TargetReview {
+                language,
+                review: result.report,
+            })
+            .collect(),
+    };
+    // Finish every target and stage both artefacts before replacing an output.
+    // Malformed responses or a later target failure never publish partial captions.
+    let staged_srt = ScopedTempPath::file(parent_dir(&output), "translated", Some("srt"));
+    let staged_report =
+        ScopedTempPath::file(parent_dir(&output), "translation-review", Some("json"));
+    write_srt_file(staged_srt.path(), &cues)?;
+    atomic_write(staged_report.path(), serde_json::to_vec_pretty(&report)?)?;
+    let previous_report = if review_report.exists() {
+        Some(std::fs::read(&review_report).context("failed to preserve existing review report")?)
+    } else {
+        None
+    };
+    staged_report.persist(&review_report)?;
+    if let Err(error) = staged_srt.persist(&output) {
+        match previous_report {
+            Some(contents) => atomic_write(&review_report, contents).context(
+                "subtitle publication failed and the previous report could not be restored",
+            )?,
+            None => std::fs::remove_file(&review_report).context(
+                "subtitle publication failed and the staged review report could not be removed",
+            )?,
+        }
+        return Err(error);
+    }
 
     Ok(TranslateOutput {
         input,
@@ -84,6 +170,9 @@ pub fn run(
         targets,
         append,
         model,
+        verification_model,
+        review_report,
+        review_issues,
         status: "translated",
     })
 }

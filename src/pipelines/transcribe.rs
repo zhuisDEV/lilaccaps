@@ -273,7 +273,7 @@ pub fn run(
     })
 }
 
-fn apply_transcribe_overrides(
+pub(crate) fn apply_transcribe_overrides(
     config: &mut TranscribeConfig,
     engine: Option<String>,
     model: Option<String>,

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use anyhow::{Context, Result, bail};
 
 use crate::config::{
-    BurninLineStyleConfig, BurninOutlineConfig, default_burnin_outline_width, load_config,
+    BurninLineStyleConfig, BurninOutlineConfig, Config, default_burnin_outline_width, load_config,
 };
 use crate::render::{BurninStyle, LineStyle, OutlineStyle, burn_in_subtitles};
 use crate::runtime::{ScopedTempPath, ensure_parent_dir, parent_dir, paths_refer_to_same_file};
@@ -142,6 +142,29 @@ fn default_output_path(video: &Path) -> PathBuf {
         .and_then(|item| item.to_str())
         .unwrap_or("mp4");
     video.with_file_name(format!("{stem}.burned.{extension}"))
+}
+
+pub(crate) fn configured_style(
+    config: &Config,
+    font: Option<String>,
+    size: Option<u32>,
+) -> BurninStyle {
+    resolve_style(
+        &config.translate.line_order,
+        config.burnin.advanced_styling,
+        &config.burnin.font,
+        &config.burnin.colour,
+        config.burnin.size,
+        config.burnin.line_spacing,
+        &config.burnin.outline,
+        &config.burnin.styles,
+        font,
+        None,
+        size,
+        None,
+        None,
+        None,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]

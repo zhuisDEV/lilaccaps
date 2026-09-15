@@ -5,38 +5,16 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
+use crate::fonts::resolve_font_path;
 use crate::media::{
     ass_colour, ensure_ffmpeg_available, ffmpeg_supports_filter, subtitles_filter, video_size,
 };
 use crate::runtime::{MAGICK_DEPENDENCY, ScopedTempPath, ensure_dependency, tmp_dir};
 use crate::subtitles::{SrtCue, parse_srt_file};
-
-const CJK_FONT_CANDIDATES: [&str; 3] = [
-    "/System/Library/Fonts/Hiragino Sans GB.ttc",
-    "/System/Library/Fonts/STHeiti Medium.ttc",
-    "/System/Library/Fonts/STHeiti Light.ttc",
-];
-
-const LATIN_FONT_CANDIDATES: [&str; 2] = [
-    "/System/Library/Fonts/Helvetica.ttc",
-    "/System/Library/Fonts/HelveticaNeue.ttc",
-];
-
-const PINGFANG_FONT_CANDIDATES: [&str; 2] = [
-    "/System/Library/AssetsV2/com_apple_MobileAsset_Font8/86ba2c91f017a3749571a82f2c6d890ac7ffb2fb.asset/AssetData/PingFang.ttc",
-    "/System/Library/Fonts/PingFang.ttc",
-];
-
-const ARIAL_FONT_CANDIDATES: [&str; 3] = [
-    "/System/Library/Fonts/Supplemental/Arial.ttf",
-    "/Library/Fonts/Arial.ttf",
-    "/Library/Fonts/Arial Unicode.ttf",
-];
-
-const HIRAGINO_SANS_FONT_CANDIDATES: [&str; 2] = [
-    "/System/Library/Fonts/Hiragino Sans GB.ttc",
-    "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
-];
+use crate::watermark::{
+    WatermarkSource, WatermarkStyle, convert_image_watermark, image_needs_conversion,
+    normalized_opacity, render_text_watermark_image, text_filter,
+};
 
 #[derive(Debug, Clone)]
 pub struct BurninStyle {
@@ -134,93 +112,180 @@ pub fn burn_in_subtitles(
     output: &Path,
     style: &BurninStyle,
 ) -> Result<BurninRendererReport> {
-    ensure_ffmpeg_available()?;
-
-    if !style.uses_overlay_renderer() && ffmpeg_supports_filter("subtitles")? {
-        burn_in_with_subtitles_filter(video, subs, output, style)?;
-        return Ok(BurninRendererReport {
-            renderer: "ffmpeg-subtitles",
-            reasons: Vec::new(),
-        });
-    }
-
-    let reasons = overlay_renderer_reasons(style);
-    burn_in_with_overlay_fallback(runtime_home, video, subs, output, style)?;
-    Ok(BurninRendererReport {
-        renderer: "overlay-fallback",
-        reasons: if reasons.is_empty() {
-            vec!["ffmpeg_subtitles_filter_unavailable"]
-        } else {
-            reasons
-        },
-    })
+    burn_in_subtitles_with_watermark(runtime_home, video, subs, output, style, None)
 }
 
-fn burn_in_with_subtitles_filter(
-    video: &Path,
-    subs: &Path,
-    output: &Path,
-    style: &BurninStyle,
-) -> Result<()> {
-    let filter = subtitles_filter(
-        subs,
-        style.font.as_deref(),
-        style.size,
-        style.outline.colour.as_deref(),
-        Some(style.outline.active_width()),
-    );
-    let status = Command::new("ffmpeg")
-        .arg("-hide_banner")
-        .arg("-loglevel")
-        .arg("error")
-        .arg("-y")
-        .arg("-i")
-        .arg(video)
-        .arg("-vf")
-        .arg(filter)
-        .arg("-map")
-        .arg("0:v:0")
-        .arg("-map")
-        .arg("0:a?")
-        .arg("-c:v")
-        .arg("libx264")
-        .arg("-pix_fmt")
-        .arg("yuv420p")
-        .arg("-c:a")
-        .arg("copy")
-        .arg(output)
-        .status()
-        .with_context(|| format!("failed to start ffmpeg burn-in for {}", video.display()))?;
-
-    if !status.success() {
-        bail!(
-            "ffmpeg failed while burning subtitles into {}",
-            video.display()
-        );
-    }
-
-    Ok(())
-}
-
-fn burn_in_with_overlay_fallback(
+/// Compose captions and an optional watermark before a single video encode.
+/// Audio is copied from the original input; callers publish the candidate after verification.
+pub fn burn_in_subtitles_with_watermark(
     runtime_home: &Path,
     video: &Path,
     subs: &Path,
     output: &Path,
     style: &BurninStyle,
-) -> Result<()> {
-    ensure_dependency(MAGICK_DEPENDENCY)?;
-
-    let cues = parse_srt_file(subs)?;
-    if cues.is_empty() {
-        bail!("subtitle file contained no cues: {}", subs.display());
+    watermark: Option<(&WatermarkSource, &WatermarkStyle)>,
+) -> Result<BurninRendererReport> {
+    ensure_ffmpeg_available()?;
+    for input in [video, subs] {
+        if crate::runtime::paths_refer_to_same_file(input, output)? {
+            bail!(
+                "render output must be different from input: {}",
+                input.display()
+            );
+        }
     }
+    if let Some((WatermarkSource::Image(image), _)) = watermark
+        && crate::runtime::paths_refer_to_same_file(image, output)?
+    {
+        bail!(
+            "render output must be different from watermark image: {}",
+            image.display()
+        );
+    }
+    let native_subtitles = !style.uses_overlay_renderer() && ffmpeg_supports_filter("subtitles")?;
+    let work_dir = ScopedTempPath::directory(&tmp_dir(runtime_home), "render")?;
+    let overlays = if native_subtitles {
+        Vec::new()
+    } else {
+        ensure_dependency(MAGICK_DEPENDENCY)?;
+        let cues = parse_srt_file(subs)?;
+        if cues.is_empty() {
+            bail!("subtitle file contained no cues: {}", subs.display());
+        }
+        let (width, height) = video_size(video)?;
+        render_overlay_images(work_dir.path(), width, height, &cues, style)?
+    };
+    let native_filter = native_subtitles.then(|| {
+        subtitles_filter(
+            subs,
+            style.font.as_deref(),
+            style.size,
+            style.outline.colour.as_deref(),
+            Some(style.outline.active_width()),
+        )
+    });
+    let mut prepared = watermark
+        .map(|(source, style)| prepare_watermark(source, style, work_dir.path(), false))
+        .transpose()?;
+    let mut reasons = if native_subtitles {
+        Vec::new()
+    } else {
+        overlay_renderer_reasons(style)
+    };
+    if !native_subtitles && reasons.is_empty() {
+        reasons.push("ffmpeg_subtitles_filter_unavailable");
+    }
+    if matches!(
+        prepared,
+        Some(PreparedWatermark::Image {
+            from_text: true,
+            ..
+        })
+    ) {
+        reasons.push("watermark_drawtext_unavailable");
+    }
+    let rendered = render_composite(
+        video,
+        output,
+        native_filter.as_deref(),
+        &overlays,
+        prepared.as_ref(),
+    );
+    if let Err(error) = rendered {
+        if matches!(prepared, Some(PreparedWatermark::Text { .. })) {
+            let (source, style) = watermark.expect("prepared text came from a watermark");
+            prepared = Some(prepare_watermark(source, style, work_dir.path(), true)?);
+            render_composite(
+                video,
+                output,
+                native_filter.as_deref(),
+                &overlays,
+                prepared.as_ref(),
+            )
+            .with_context(|| {
+                format!("native text watermark failed ({error}); image fallback also failed")
+            })?;
+            reasons.push("watermark_drawtext_failed");
+        } else {
+            return Err(error);
+        }
+    }
+    Ok(BurninRendererReport {
+        renderer: match (native_subtitles, watermark.is_some()) {
+            (true, false) => "ffmpeg-subtitles",
+            (false, false) => "overlay-fallback",
+            (true, true) => "ffmpeg-subtitles+watermark",
+            (false, true) => "overlay-fallback+watermark",
+        },
+        reasons,
+    })
+}
 
-    let (width, height) = video_size(video)?;
-    let work_dir = ScopedTempPath::directory(&tmp_dir(runtime_home), "burnin-overlays")?;
+enum PreparedWatermark<'a> {
+    Text {
+        text: &'a str,
+        style: &'a WatermarkStyle,
+    },
+    Image {
+        path: PathBuf,
+        style: WatermarkStyle,
+        from_text: bool,
+        _temporary: Option<ScopedTempPath>,
+    },
+}
 
-    let overlays = render_overlay_images(work_dir.path(), width, height, &cues, style)?;
-    burn_in_with_overlay_images(video, &overlays, output)
+fn prepare_watermark<'a>(
+    source: &'a WatermarkSource,
+    style: &'a WatermarkStyle,
+    work_dir: &Path,
+    force_text_overlay: bool,
+) -> Result<PreparedWatermark<'a>> {
+    normalized_opacity(style.opacity)?;
+    match source {
+        WatermarkSource::Text(text) => {
+            if text.trim().is_empty() {
+                bail!("watermark text must not be empty");
+            }
+            if style.font.is_some() {
+                resolve_font_path(style.font.as_deref(), text)?;
+            }
+            if !force_text_overlay && ffmpeg_supports_filter("drawtext")? {
+                return Ok(PreparedWatermark::Text { text, style });
+            }
+            let image = ScopedTempPath::file(work_dir, "watermark-text", Some("png"));
+            render_text_watermark_image(text, style, image.path())?;
+            let mut image_style = style.clone();
+            image_style.size = 0;
+            Ok(PreparedWatermark::Image {
+                path: image.path().to_path_buf(),
+                style: image_style,
+                from_text: true,
+                _temporary: Some(image),
+            })
+        }
+        WatermarkSource::Image(path) => {
+            if !path.is_file() {
+                bail!("watermark image does not exist: {}", path.display());
+            }
+            if image_needs_conversion(path) {
+                let image = ScopedTempPath::file(work_dir, "watermark-image", Some("png"));
+                convert_image_watermark(path, image.path(), style)?;
+                Ok(PreparedWatermark::Image {
+                    path: image.path().to_path_buf(),
+                    style: style.clone(),
+                    from_text: false,
+                    _temporary: Some(image),
+                })
+            } else {
+                Ok(PreparedWatermark::Image {
+                    path: path.clone(),
+                    style: style.clone(),
+                    from_text: false,
+                    _temporary: None,
+                })
+            }
+        }
+    }
 }
 
 fn render_overlay_images(
@@ -268,13 +333,10 @@ fn render_overlay_image(
     if style.has_line_overrides() && lines.len() > 1 {
         for (index, line) in lines.iter().enumerate() {
             let text_source = caption_text_source(work_dir, line, &mut caption_files)?;
-            let line_style = line_style_for_index(style, index, line);
-            let font_path = line_style
-                .font
-                .as_deref()
-                .or(style.font.as_deref())
-                .map(|font| resolve_overlay_font(font, line))
-                .unwrap_or_else(|| select_overlay_font(line).to_string());
+            let line_style = line_style_for_index(style, index);
+            let font_path =
+                resolve_font_path(line_style.font.as_deref().or(style.font.as_deref()), line)?;
+            let font_path = font_path.to_string_lossy();
             let fill_colour = line_style
                 .colour
                 .as_deref()
@@ -308,11 +370,8 @@ fn render_overlay_image(
             .arg("-append");
     } else {
         let text_source = caption_text_source(work_dir, &cue.text, &mut caption_files)?;
-        let font_path = style
-            .font
-            .as_deref()
-            .map(|font| resolve_overlay_font(font, &cue.text))
-            .unwrap_or_else(|| select_overlay_font(&cue.text).to_string());
+        let font_path = resolve_font_path(style.font.as_deref(), &cue.text)?;
+        let font_path = font_path.to_string_lossy();
         let fill_colour = style.colour.as_deref().unwrap_or("white");
         append_text_with_shadow(
             &mut command,
@@ -477,71 +536,99 @@ fn caption_text_source(
     Ok(source)
 }
 
-fn burn_in_with_overlay_images(
+fn render_composite(
     video: &Path,
-    overlays: &[(SrtCue, PathBuf)],
     output: &Path,
+    native_subtitles: Option<&str>,
+    overlays: &[(SrtCue, PathBuf)],
+    watermark: Option<&PreparedWatermark<'_>>,
 ) -> Result<()> {
-    if overlays.is_empty() {
-        bail!("no subtitle overlays were generated");
-    }
-
     let mut command = Command::new("ffmpeg");
     command
-        .arg("-hide_banner")
-        .arg("-loglevel")
-        .arg("error")
-        .arg("-y")
-        .arg("-i")
+        .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
         .arg(video);
 
-    for (_, image_path) in overlays {
-        command.arg("-i").arg(image_path);
-    }
-
-    let mut filter_graph = String::new();
-    let mut previous = "0:v".to_string();
-
-    for (index, (cue, _)) in overlays.iter().enumerate() {
-        let input = format!("{}:v", index + 1);
-        let next = format!("v{}", index + 1);
-        let start = cue.start_ms as f64 / 1000.0;
-        let end = cue.end_ms as f64 / 1000.0;
-
-        if !filter_graph.is_empty() {
-            filter_graph.push(';');
+    // Keep the simple native path equivalent to the standalone burn-in command.
+    if let Some(subtitles) = native_subtitles
+        && !matches!(watermark, Some(PreparedWatermark::Image { .. }))
+    {
+        let filter = match watermark {
+            Some(PreparedWatermark::Text { text, style }) => {
+                format!("{subtitles},{}", text_filter(text, style))
+            }
+            _ => subtitles.to_string(),
+        };
+        command.args(["-vf", &filter, "-map", "0:v:0"]);
+    } else {
+        let mut graph = Vec::new();
+        let mut previous = "0:v:0".to_string();
+        if let Some(subtitles) = native_subtitles {
+            graph.push(format!("[{previous}]{subtitles}[captioned]"));
+            previous = "captioned".to_string();
         }
-
-        filter_graph.push_str(&format!(
-            "[{input}]format=rgba[ov{index}];[{previous}][ov{index}]overlay=0:0:enable='between(t,{start:.3},{end:.3})'[{next}]"
-        ));
-
-        previous = next;
+        for (index, (cue, image)) in overlays.iter().enumerate() {
+            command.arg("-i").arg(image);
+            let input = index + 1;
+            let start = cue.start_ms as f64 / 1000.0;
+            let end = cue.end_ms as f64 / 1000.0;
+            let next = format!("caption{index}");
+            graph.push(format!("[{input}:v]format=rgba[ov{index}];[{previous}][ov{index}]overlay=0:0:enable='between(t,{start:.3},{end:.3})'[{next}]"));
+            previous = next;
+        }
+        match watermark {
+            Some(PreparedWatermark::Text { text, style }) => {
+                graph.push(format!(
+                    "[{previous}]{}[watermarked]",
+                    text_filter(text, style)
+                ));
+                previous = "watermarked".to_string();
+            }
+            Some(PreparedWatermark::Image { path, style, .. }) => {
+                command.arg("-i").arg(path);
+                let input = overlays.len() + 1;
+                let resize = if style.size == 0 {
+                    String::new()
+                } else {
+                    format!("scale={}:-1:flags=lanczos,", style.size)
+                };
+                let (x, y) = style.position.overlay_xy(style.margin);
+                graph.push(format!("[{input}:v]{resize}format=rgba,colorchannelmixer=aa={:.3}[wm];[{previous}][wm]overlay=x={x}:y={y}:format=auto[watermarked]", style.opacity));
+                previous = "watermarked".to_string();
+            }
+            None => {}
+        }
+        if graph.is_empty() {
+            bail!("no subtitle or watermark filters were generated");
+        }
+        command
+            .arg("-filter_complex")
+            .arg(graph.join(";"))
+            .arg("-map")
+            .arg(format!("[{previous}]"));
     }
-
     command
-        .arg("-filter_complex")
-        .arg(filter_graph)
-        .arg("-map")
-        .arg(format!("[{previous}]"))
-        .arg("-map")
-        .arg("0:a?")
-        .arg("-c:v")
-        .arg("libx264")
-        .arg("-pix_fmt")
-        .arg("yuv420p")
-        .arg("-c:a")
-        .arg("copy")
+        .args([
+            "-map",
+            "0:a?",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "copy",
+            "-movflags",
+            "+faststart",
+        ])
         .arg(output);
-
     let status = command
         .status()
-        .with_context(|| format!("failed to start overlay burn-in for {}", video.display()))?;
-
+        .with_context(|| format!("failed to start ffmpeg render for {}", video.display()))?;
     if !status.success() {
-        bail!("ffmpeg failed while compositing subtitle overlays");
+        bail!(
+            "ffmpeg failed while compositing captions and watermark for {}",
+            video.display()
+        );
     }
-
     Ok(())
 }
 
@@ -580,106 +667,27 @@ fn overlay_renderer_reasons(style: &BurninStyle) -> Vec<&'static str> {
     reasons
 }
 
-fn line_style_for_index(style: &BurninStyle, index: usize, line: &str) -> LineStyle {
+fn line_style_for_index(style: &BurninStyle, index: usize) -> LineStyle {
     let role = style
         .line_order
         .get(index)
         .map(String::as_str)
         .unwrap_or("");
-    let mut resolved = style.line_styles.get(role).cloned().unwrap_or_default();
-    if resolved.font.is_none() {
-        resolved.font = Some(select_overlay_font(line).to_string());
-    }
-    resolved
+    style.line_styles.get(role).cloned().unwrap_or_default()
 }
 
-fn select_overlay_font(text: &str) -> &'static str {
-    let candidates = if text.chars().any(is_cjk_or_korean_or_japanese) {
-        &CJK_FONT_CANDIDATES[..]
-    } else {
-        &LATIN_FONT_CANDIDATES[..]
-    };
-
-    candidates
-        .iter()
-        .copied()
-        .find(|path| Path::new(path).exists())
-        .unwrap_or(LATIN_FONT_CANDIDATES[0])
-}
-
-fn resolve_overlay_font(requested: &str, sample_text: &str) -> String {
-    let trimmed = requested.trim();
-    if trimmed.is_empty() {
-        return select_overlay_font(sample_text).to_string();
-    }
-
-    if Path::new(trimmed).exists() {
-        return trimmed.to_string();
-    }
-
-    if let Some(path) = named_font_candidates(trimmed)
-        .iter()
-        .copied()
-        .find(|path| Path::new(path).exists())
-    {
-        return path.to_string();
-    }
-
-    select_overlay_font(sample_text).to_string()
-}
-
-fn named_font_candidates(requested: &str) -> &'static [&'static str] {
-    match normalize_font_name(requested).as_str() {
-        "pingfangsc" | "pingfang" => &PINGFANG_FONT_CANDIDATES,
-        "arial" => &ARIAL_FONT_CANDIDATES,
-        "hiraginosans" | "hiraginosansgb" => &HIRAGINO_SANS_FONT_CANDIDATES,
-        _ => &[],
-    }
-}
-
-fn normalize_font_name(raw: &str) -> String {
-    raw.chars()
-        .filter(|ch| ch.is_ascii_alphanumeric())
-        .flat_map(char::to_lowercase)
-        .collect()
-}
-
-fn is_cjk_or_korean_or_japanese(ch: char) -> bool {
-    matches!(
-        ch as u32,
-        0x3400..=0x4DBF
-            | 0x4E00..=0x9FFF
-            | 0x3040..=0x309F
-            | 0x30A0..=0x30FF
-            | 0x31F0..=0x31FF
-            | 0xAC00..=0xD7AF
-            | 0xF900..=0xFAFF
-            | 0xFF66..=0xFF9D
-    )
-}
+#[cfg(test)]
+#[path = "../tests/rendering/combined.rs"]
+mod combined_tests;
 
 #[cfg(test)]
 mod tests {
     use super::{
-        BurninStyle, LineStyle, OutlineStyle, TextLayerSpec, is_cjk_or_korean_or_japanese,
-        label_layer_args, line_style_for_index, multiline_line_padding, named_font_candidates,
-        overlay_renderer_reasons, select_overlay_font, subtitle_wrap_width,
+        BurninStyle, LineStyle, OutlineStyle, TextLayerSpec, label_layer_args,
+        line_style_for_index, multiline_line_padding, overlay_renderer_reasons,
+        subtitle_wrap_width,
     };
     use std::collections::HashMap;
-
-    #[test]
-    fn detects_cjk_script() {
-        assert!(is_cjk_or_korean_or_japanese('不'));
-        assert!(is_cjk_or_korean_or_japanese('あ'));
-        assert!(is_cjk_or_korean_or_japanese('한'));
-        assert!(!is_cjk_or_korean_or_japanese('A'));
-    }
-
-    #[test]
-    fn prefers_cjk_font_for_cjk_text() {
-        let font = select_overlay_font("不好了麻醉剂用完了");
-        assert!(!font.contains("Helvetica"));
-    }
 
     #[test]
     fn resolves_line_style_by_ordered_role() {
@@ -702,15 +710,9 @@ mod tests {
             line_styles,
         };
 
-        let line_style = line_style_for_index(&style, 1, "English");
+        let line_style = line_style_for_index(&style, 1);
         assert_eq!(line_style.font.as_deref(), Some("Arial"));
         assert_eq!(line_style.size, Some(30));
-    }
-
-    #[test]
-    fn maps_named_font_aliases_to_candidates() {
-        assert!(!named_font_candidates("PingFang SC").is_empty());
-        assert!(!named_font_candidates("Arial").is_empty());
     }
 
     #[test]

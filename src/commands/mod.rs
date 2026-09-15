@@ -8,3 +8,5 @@ pub mod uninstall;
 pub mod update;
 pub mod version;
 pub mod watermark;
+pub mod watermark_preset;
+pub mod workflow;

@@ -1,6 +1,96 @@
 # lilaccaps Handoff
 
-## Unreleased
+## v1.0.0 Release Scope
+
+Deliver an agent-in-the-loop caption project and reusable watermarks as **v1.0.0**. Publication was
+authorised on 2026-09-15 after review of the working alpha and its live sample. Keep the current
+configurable cue timing defaults; unclear-audio improvements remain later work. The exact release
+commit must pass CI before tagging and publication. Published metadata and final CI evidence belong
+in the [GitHub release](https://github.com/zhuisDEV/lilaccaps/releases/tag/v1.0.0).
+
+## v1 Implementation
+
+- Added `workflow start/resume/status/accept/render`. Projects retain raw ASR, numbered source and
+  translation revisions, structured agent reports, a review queue, config and watermark snapshots.
+  Failed stages resume without repeating completed review or losing older manual edits.
+- Added separate caption generation and verification requests with stable cue IDs, exact original
+  timings, neighbouring cues and joined utterance context. Invalid responses retry in smaller
+  batches; subprocess, authentication and timeout failures stop immediately. Translation defaults
+  to Luna generation and Terra verification, with both model settings configurable.
+- Added conservative transcription correction, common English/Chinese quantity checks, and visible
+  uncertainty/readability issues. Agent processes use structured outputs, ephemeral read-only Codex
+  sessions and existing ChatGPT authentication. Unix timeouts terminate the entire process group.
+- Review acceptance binds source and selected captions, reports and watermark assets. Edits
+  invalidate acceptance. Project locks, immutable raw checkpoints, media fingerprints and revision
+  validation protect resumability; rendering freezes the accepted inputs and rejects existing output
+  paths.
+- Added named text/image watermark presets with copied image and explicit font assets. Projects
+  keep independent snapshots, so removing a library preset does not break an existing project.
+- Combined subtitle and watermark rendering in one successful encode, with portable font discovery
+  and retained native/fallback rendering paths. The workflow compares video metadata and every audio
+  packet, fully decodes the candidate, and only then publishes a new output file.
+- Updated README, skill, generated integration guidance and product plan. New setup defaults to the
+  Codex skill directory while preserving configured paths and customised skills. Added a Linux CI
+  job alongside macOS, including genuine FFmpeg/ImageMagick rendering tests.
+- Updated compatible locked dependency patches; the current RustSec audit is clean.
+- Declared Rust 1.89 as the minimum for project file locking and documented the toolchain upgrade
+  step for existing installations.
+- A release gate exposed transient Linux `ETXTBSY` while launching a newly written executable.
+  Only that pre-execution error gets a brief bounded retry, counted inside the request timeout;
+  missing executables, permission failures and failed requests still stop immediately. Regression
+  tests hold real write-open executable handles to cover recovery and both retry/timeout bounds.
+
+## Validation: 2026-09-15
+
+Completed locally on Ubuntu with Rust 1.95, FFmpeg 8.0.1, ImageMagick 7.1.2-31 and Codex 0.147.0:
+
+- **195 Rust tests passed**: 175 unit, 3 lifecycle, 5 rendering, 5 translation, 2 watermark-preset
+  and 5 workflow tests. Real FFmpeg fixtures cover combined rendering, multiple audio tracks,
+  silent video, CJK, PNG/SVG, resumability, stale acceptance and no-clobber output publication.
+- Rust formatting, strict all-target/all-feature Clippy, locked tests and optimised release build.
+- Python formatting/lint/type checks and the pinned faster-whisper dependency probe.
+- Shell syntax, ShellCheck, actionlint, skill validation and `git diff --check`.
+- Gitleaks checks of history and the current non-ignored working files found no leaks. Cargo audit
+  reported zero vulnerabilities and zero warnings after compatible dependency updates.
+
+### Live Caption Project
+
+The local sample at `.tmp/v1-smoke/job` used a 32-second English excerpt, cached faster-whisper
+large-v3-turbo, source review, Simplified Chinese translation, explicit review acceptance and the
+saved `LILAC` watermark. The final video is `.tmp/v1-smoke/job/final.mp4`; selected captions are in
+`target-0002/captions.srt`, with technical evidence in `render-0001/verification.json`.
+
+- All 21 cue IDs and millisecond timings were retained. A live trial exposed a reversed comparison
+  across cues; joined utterance context and the stronger verification pass corrected it while
+  retaining `20 trillion` as `20万亿`. The previous revision remains available for comparison.
+- The render contains Chinese captions only, native ASS size 32 with the default outline, and a
+  top-right `LILAC` watermark. Four representative frames, including the longest caption and the
+  financial amount, were visually checked for readable glyphs, placement and clipping.
+- The 1920x1080 output retains all 960 frames and the 32.032-second container duration. All 1,501
+  audio packets retain their data and timestamps. Full-file decode passed.
+- The sample acceptance explicitly acknowledges short cues and an unclear repeated source phrase.
+  Review was of the text and sampled visuals, not a full recording/audio accuracy audit.
+
+The sample, logs and local check tools are ignored development artefacts, not release assets. The
+input recording, previous user exports, installed stable CLI and installed skill were preserved.
+
+## Release Gates and Limits
+
+- The exact pushed commit must pass GitHub Actions on macOS and Linux before a release. CI
+  configuration was also validated locally. See the GitHub release for the final run and commit.
+- Text-only review cannot settle unclear speech. Numeric QA is heuristic and timing is preserved;
+  short cues are flagged rather than automatically retimed. Audio-grounded review and richer timing
+  repair remain later work in the product plan.
+- The live model test is one English-to-Chinese excerpt. It demonstrates integration and a concrete
+  correction, not general transcription/translation accuracy across languages or recordings.
+- Font family presets depend on installed fonts; use explicit font files for portable assets.
+  Technical render verification still requires a separate visual check for appearance.
+
+## Historical v0.1.x Notes
+
+The following sections record earlier milestones and their verification at that time.
+
+### Version Reporting
 
 - Replaced the root Clap-only `--version` response with a fail-open release-aware report. It always
   prints the installed version first, uses a five-second stable-release lookup, and only adds
@@ -10,11 +100,6 @@
   back to the installed-version line.
 - Added focused root-argument and semantic-version comparison tests and synchronized the README,
   quick-start skill, generated integration guidance, and product plan.
-
-## Current Objective
-
-Maintain the post-`v0.1.20` CLI and prepare the next `v0.1.x` release from reviewed unreleased work.
-Keep transcription, translation, burn-in, and watermarking as separate commands.
 
 ## v0.1.20 Transcription Quality Work
 
@@ -119,8 +204,8 @@ Completed locally:
 Translation request construction, credential precedence, parsing, and missing-credential failure are
 covered, but a live Gemini translation was not run because this machine has no `GEMINI_API_KEY`.
 
-The `v0.1.19` publication sequence is complete. Publish `v0.1.20` only after the full local release
-gate and exact pushed commit pass.
+At that milestone, the `v0.1.19` publication sequence was complete; `v0.1.20` still required the full
+local release gate and checks on the exact pushed commit.
 
 ## Release Discipline
 

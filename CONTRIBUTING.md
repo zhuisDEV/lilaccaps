@@ -14,7 +14,7 @@ Keep the project aligned with the core design:
 
 Required tools:
 
-- `cargo`
+- Rust 1.89 or newer with `cargo`
 - `ffmpeg`
 - `ffprobe`
 - `cmake`

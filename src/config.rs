@@ -165,6 +165,10 @@ pub struct TranslateConfig {
     pub reasoning_effort: String,
     #[serde(default = "default_translate_model")]
     pub model: String,
+    #[serde(default = "default_translate_review_model")]
+    pub review_model: String,
+    #[serde(default = "default_translate_reasoning_effort")]
+    pub review_reasoning_effort: String,
     #[serde(default = "default_translate_append")]
     pub append: bool,
     #[serde(default)]
@@ -392,6 +396,10 @@ pub fn default_translate_model() -> String {
     DEFAULT_TRANSLATE_MODEL.to_string()
 }
 
+pub fn default_translate_review_model() -> String {
+    "gpt-5.6-terra".to_string()
+}
+
 pub fn default_translate_append() -> bool {
     true
 }
@@ -469,6 +477,8 @@ impl Default for TranslateConfig {
             command: default_transcribe_cleanup_command(),
             reasoning_effort: default_translate_reasoning_effort(),
             model: default_translate_model(),
+            review_model: default_translate_review_model(),
+            review_reasoning_effort: default_translate_reasoning_effort(),
             append: default_translate_append(),
             default_targets: Vec::new(),
             line_order: Vec::new(),
@@ -730,6 +740,8 @@ mod tests {
         assert!(config.burnin.styles.is_empty());
         assert_eq!(config.translate.model, "gpt-5.6-luna");
         assert_eq!(config.translate.reasoning_effort, "medium");
+        assert_eq!(config.translate.review_model, "gpt-5.6-terra");
+        assert_eq!(config.translate.review_reasoning_effort, "medium");
         assert_eq!(config.translate.command, "codex");
         assert!(config.translate.append);
         assert!(config.translate.default_targets.is_empty());
@@ -795,6 +807,8 @@ id = "base"
         assert_eq!(config.burnin.outline.width, 2);
         assert!(config.burnin.styles.is_empty());
         assert_eq!(config.translate.model, "gemini-3.1-flash-lite-preview");
+        assert_eq!(config.translate.review_model, "gpt-5.6-terra");
+        assert_eq!(config.translate.review_reasoning_effort, "medium");
         assert!(config.translate.append);
         assert!(config.translate.default_targets.is_empty());
         assert!(config.translate.line_order.is_empty());
@@ -813,6 +827,19 @@ id = "base"
         assert!(rendered.contains("min_silence_ms = 350"));
         assert!(rendered.contains("[transcribe.cues]"));
         assert!(rendered.contains("[transcribe.cleanup]"));
+        assert!(rendered.contains("review_model = \"gpt-5.6-terra\""));
+        assert!(rendered.contains("review_reasoning_effort = \"medium\""));
+    }
+
+    #[test]
+    fn translation_review_settings_round_trip_independently_of_generation() {
+        let config: super::TranslateConfig = toml::from_str("model = 'gpt-5.6-luna'\nreasoning_effort = 'low'\nreview_model = 'gpt-6-astra'\nreview_reasoning_effort = 'high'\n").unwrap();
+        let restored: super::TranslateConfig =
+            toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+        assert_eq!(restored.model, "gpt-5.6-luna");
+        assert_eq!(restored.reasoning_effort, "low");
+        assert_eq!(restored.review_model, "gpt-6-astra");
+        assert_eq!(restored.review_reasoning_effort, "high");
     }
 
     #[test]
