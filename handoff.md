@@ -39,6 +39,9 @@ in the [GitHub release](https://github.com/zhuisDEV/lilaccaps/releases/tag/v1.0.
   Only that pre-execution error gets a brief bounded retry, counted inside the request timeout;
   missing executables, permission failures and failed requests still stop immediately. Regression
   tests hold real write-open executable handles to cover recovery and both retry/timeout bounds.
+- The Linux CI timing test now checks caption visibility at exact frame indices and validates every
+  output frame timestamp. It avoids comparing lossy output pixels with the original and includes a
+  deliberately early caption as a negative control, while retaining the rendering implementation.
 
 ## Validation: 2026-09-15
 

@@ -89,6 +89,68 @@ fn frame_digest(path: &Path, timestamp: &str) -> Vec<u8> {
     .stdout
 }
 
+fn caption_pixel_count(path: &Path, frame: usize) -> usize {
+    let pixels = success(
+        Command::new("ffmpeg")
+            .args(["-hide_banner", "-loglevel", "error", "-i"])
+            .arg(path)
+            .args([
+                "-vf",
+                &format!("select=eq(n\\,{frame})"),
+                "-frames:v",
+                "1",
+                "-fps_mode",
+                "passthrough",
+                "-pix_fmt",
+                "gray",
+                "-f",
+                "rawvideo",
+                "-",
+            ]),
+    )
+    .stdout;
+    assert_eq!(pixels.len(), 640 * 360, "missing frame {frame}");
+
+    // This fixture has a flat grey background. White lettering and its black
+    // outline have strong contrast; small lossy-encoding changes do not.
+    let background = pixels[0];
+    pixels
+        .iter()
+        .filter(|&&pixel| pixel.abs_diff(background) > 48)
+        .count()
+}
+
+fn assert_fixture_frame_timestamps(path: &Path) {
+    let probe = success(
+        Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "frame=best_effort_timestamp_time",
+                "-of",
+                "json",
+            ])
+            .arg(path),
+    );
+    let metadata: serde_json::Value = serde_json::from_slice(&probe.stdout).unwrap();
+    let frames = metadata["frames"].as_array().unwrap();
+    assert_eq!(frames.len(), 40, "the 100fps fixture must keep every frame");
+    for (index, frame) in frames.iter().enumerate() {
+        let timestamp: f64 = frame["best_effort_timestamp_time"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(
+            (timestamp - index as f64 / 100.0).abs() < 0.000_001,
+            "frame {index} has unexpected timestamp {timestamp}"
+        );
+    }
+}
+
 fn reference(fixture: &Fixture, filter: &str) -> PathBuf {
     let output = fixture.0.join("reference.mp4");
     success(
@@ -194,15 +256,28 @@ fn invalid_unicode_colour_fails_without_replacing_an_existing_output() {
 fn overlay_rendering_preserves_imported_millisecond_boundaries() {
     let fixture = video_fixture();
     let subtitles = fixture.0.join("precise.srt");
-    fs::write(&subtitles, "1\n00:00:00,239 --> 00:00:00,350\nHello\n").unwrap();
+    fs::write(&subtitles, "1\n00:00:00,239 --> 00:00:00,351\nHello\n").unwrap();
     let output = burnin(&fixture, &subtitles, "overlay.mp4", &["--colour", "white"]);
-    let input = fixture.0.join("input.mp4");
-    assert_eq!(
-        frame_digest(&output, "0.230"),
-        frame_digest(&input, "0.230")
+    assert_fixture_frame_timestamps(&output);
+
+    // Select explicit frames, so output-side seek rounding cannot select a
+    // neighbour. Exact pixel hashes are unsuitable across lossy encodes.
+    assert_eq!(caption_pixel_count(&output, 23), 0, "caption starts early");
+    assert!(
+        caption_pixel_count(&output, 24) > 100,
+        "caption starts late"
     );
-    assert_ne!(
-        frame_digest(&output, "0.240"),
-        frame_digest(&input, "0.240")
+    assert!(caption_pixel_count(&output, 35) > 100, "caption ends early");
+    assert_eq!(caption_pixel_count(&output, 36), 0, "caption ends late");
+
+    // Negative control: the old centisecond truncation would start at 230ms.
+    // It must be detected, rather than hiding a timing regression in the control.
+    let rounded = fixture.0.join("rounded.srt");
+    fs::write(&rounded, "1\n00:00:00,230 --> 00:00:00,351\nHello\n").unwrap();
+    let rounded_output = burnin(&fixture, &rounded, "rounded.mp4", &["--colour", "white"]);
+    assert_fixture_frame_timestamps(&rounded_output);
+    assert!(
+        caption_pixel_count(&rounded_output, 23) > 100,
+        "the early-onset negative control must visibly fail the 230ms check"
     );
 }
